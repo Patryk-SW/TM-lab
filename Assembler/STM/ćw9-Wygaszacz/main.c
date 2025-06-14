@@ -1,11 +1,11 @@
 // ===================== INCLUDES =====================
-#include "main.h"
-#include "core_cm4.h" // Plik nagłówkowy specyficzny dla rdzenia ARM Cortex-M4
-#include "stdio.h"
+#include "main.h"           // Plik nagłówkowy projektu
+#include "core_cm4.h"       // Definicje rdzenia ARM Cortex-M4
+#include "stdio.h"          // Standardowa biblioteka C
 
 // ===================== DEFINES & GLOBALS =====================
-unsigned short int *const LCD_FB = (unsigned short int*) 0xD0000000;
-unsigned short int *const LCD_BUF = (unsigned short int*) 0xD0100000;
+unsigned short int *const LCD_FB = (unsigned short int*) 0xD0000000; // Wskaźnik na bufor ramki LCD
+unsigned short int *const LCD_BUF = (unsigned short int*) 0xD0100000; // Wskaźnik na bufor roboczy LCD
 
 enum AppState_t {
     A_MenuGlowne,
@@ -40,30 +40,31 @@ unsigned int spoczynek = 0;
 zegar_t g_zegar = {0, 0, 0};
 
 // ===================== FUNKCJE POMOCNICZE =====================
+// Odczyt pozycji joysticka (ADC)
 unsigned int GetJoyPos(void) {
-    // a. ADC START
-    ADC1->CR2 |= ADC_CR2_JSWSTART;
-    ADC3->CR2 |= ADC_CR2_JSWSTART;
-    // b. ADC CZEKAJ NA ZAKOŃCZENIE POMIARU
-    while (!(ADC1->SR & ADC_SR_JEOC));
-    // c. ADC POBIERZ POMIAR
-    pomiar1 = ADC1->JDR1;
+    ADC1->CR2 |= ADC_CR2_JSWSTART; // Rozpocznij konwersję ADC1
+    ADC3->CR2 |= ADC_CR2_JSWSTART; // Rozpocznij konwersję ADC3
+    while (!(ADC1->SR & ADC_SR_JEOC)); // Czekaj na zakończenie konwersji ADC1
+    pomiar1 = ADC1->JDR1; // Odczytaj wynik ADC1
     pomiar2 = ADC1->JDR2;
     pomiar3 = ADC1->JDR3;
     pomiar4 = ADC3->JDR1;
-    ADC1->SR &= ~ADC_SR_JEOC;
+    ADC1->SR &= ~ADC_SR_JEOC; // Wyzeruj flagę zakończenia konwersji
     ADC3->SR &= ~ADC_SR_JEOC;
-    return pomiar1;
+    return pomiar1; // Zwróć wynik
 }
 
+// Odczyt stanu przycisku 9
 unsigned int GetButton9(void) {
-    return GPIOC->IDR & (1 << 11);
+    return GPIOC->IDR & (1 << 11); // Zwraca 1 jeśli przycisk nie wciśnięty, 0 jeśli wciśnięty
 }
 
+// Odczyt stanu przycisku 10
 unsigned int GetButton10(void) {
-    return GPIOC->IDR & (1 << 12);
+    return GPIOC->IDR & (1 << 12); // Zwraca 1 jeśli przycisk nie wciśnięty, 0 jeśli wciśnięty
 }
 
+// Wyświetlanie menu na LCD
 void WypiszMenu() {
     BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_Oswietlenie], (uint8_t*) "Oswietlenie", 1);
     BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_Ogrzewanie], (uint8_t*) "Ogrzewanie", 1);
@@ -71,48 +72,51 @@ void WypiszMenu() {
     BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_oAplikacji], (uint8_t*) "O aplikacji", 1);
 }
 
+// Rysowanie podświetlenia wybranej pozycji menu
 void RysujPodswietlenie(unsigned int pozycja) {
     for (unsigned int y = pozycja; y < pozycja + 12; y++) {
         for (unsigned int x = 100; x < 220 && x < LCD_WIDTH; x++) {
-            LCD_BUF[y * LCD_WIDTH + x] = 0xc0cb;
+            LCD_BUF[y * LCD_WIDTH + x] = 0xc0cb; // Kolor podświetlenia
         }
     }
 }
 
+// Przyciemnianie ekranu (wygaszacz)
 void PrzyciemnijEkran(void) {
     for (int idx = 0; idx < 320 * 240; idx++) {
-        LCD_BUF[idx] = (LCD_BUF[idx] & 0xf7de) >> 1;
+        LCD_BUF[idx] = (LCD_BUF[idx] & 0xf7de) >> 1; // Operacja na kolorze piksela
     }
 }
 
+// Wyświetlanie zegara bezczynności
 void Zegar(void) {
-    asm ("cpsid i");
-    zegar_t l_zegar = g_zegar;
-    asm ("cpsie i");
+    asm ("cpsid i"); // Wyłącz przerwania
+    zegar_t l_zegar = g_zegar; // Kopia zegara
+    asm ("cpsie i"); // Włącz przerwania
     char zegar_str[40];
     snprintf(zegar_str, sizeof(zegar_str), "Brak aktywnosci %02i:%02i", g_zegar.mins, g_zegar.secs);
-    BSP_LCD_DisplayStringAt(320, 220, (uint8_t*)zegar_str, LEFT_MODE);
+    BSP_LCD_DisplayStringAt(320, 220, (uint8_t*)zegar_str, LEFT_MODE); // Wyświetl zegar
 }
 
 // ===================== MAIN =====================
 int main(void) {
-    System_Init();
+    System_Init(); // Inicjalizacja systemu
     while (1) {
         if (spoczynek > 1) {
-            Zegar();
+            Zegar(); // Wyświetl zegar bezczynności
         }
         switch (AppState) {
             case A_MenuGlowne:
-                first_entry = 1;
-                RysujPodswietlenie(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]);
-                WypiszMenu();
-                if (!(GetButton9())) {
+                first_entry = 1; // Pierwsze wejście do menu
+                RysujPodswietlenie(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]); // Podświetl pozycję
+                WypiszMenu(); // Wyświetl menu
+                if (!(GetButton9())) { // Jeśli przycisk 9 wciśnięty
                     AppState = A_AktywacjaWyboruMenu;
                     MenuActivationTimer = 20;
                     spoczynek = 0;
                     break;
                 }
-                unsigned int JPos = GetJoyPos();
+                unsigned int JPos = GetJoyPos(); // Odczytaj joystick
                 if (JPos > 3000) {
                     MenuAnimationTimer = 5;
                     AppState = A_AnimPodswietleniaMenu;
@@ -129,7 +133,7 @@ int main(void) {
                 g_zegar.mins = 0;
                 break;
             case A_AnimPodswietleniaMenu:
-                MenuAnimationTimer--;
+                MenuAnimationTimer--; // Odliczanie animacji
                 RysujPodswietlenie(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]);
                 WypiszMenu();
                 if (MenuAnimationTimer == 0) {
@@ -150,20 +154,20 @@ int main(void) {
                 spoczynek = 0;
                 break;
             case A_Oswietlenie:
-                GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2);
+                GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2); // Ustaw port G13 jako wyjście
                 if (first_entry == 1) {
-                    GPIOG->BSRR = GPIO_Pin_13;
-                    for (volatile int i = 0; i < 100000; i++);
-                    GPIOG->BSRR = GPIO_Pin_13 << 16;
+                    GPIOG->BSRR = GPIO_Pin_13; // Włącz LED
+                    for (volatile int i = 0; i < 100000; i++); // Krótkie opóźnienie
+                    GPIOG->BSRR = GPIO_Pin_13 << 16; // Wyłącz LED
                     first_entry = 0;
                 }
                 BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[0], (uint8_t*) "Oswietlenie", 1);
                 BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[1], (uint8_t*) "Powrot", 1);
-                if (!(GetButton10())) {
+                if (!(GetButton10())) { // Jeśli przycisk 10 wciśnięty
                     AppState = A_MenuGlowne;
                     spoczynek = 0;
                 }
-                while (!(GetButton10()));
+                while (!(GetButton10())); // Czekaj na puszczenie przycisku
                 break;
             case A_Ogrzewanie:
                 GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2);
@@ -214,7 +218,7 @@ int main(void) {
                 while (!(GetButton10()));
                 break;
             case A_Idle_Start:
-                PrzyciemnijEkran();
+                PrzyciemnijEkran(); // Wygaszacz ekranu
                 AppState = A_Idle_Stay;
                 break;
             case A_Idle_Stay:
@@ -227,23 +231,25 @@ int main(void) {
                 AppState = A_MenuGlowne;
         }
         if (spoczynek >= 3000) {
-            AppState = A_Idle_Start;
+            AppState = A_Idle_Start; // Przejście do wygaszacza
         }
-        Clear_And_Reload_Screen();
+        Clear_And_Reload_Screen(); // Odśwież ekran
     }
 }
 
 // ===================== HANDLERY & INICJALIZACJA =====================
+// Obsługa przerwania SysTick (1ms)
 void SysTick_Handler(void) {
-    HAL_IncTick();
+    HAL_IncTick(); // Zwiększ licznik systemowy
 }
 
+// Inicjalizacja systemu
 void System_Init() {
-    HAL_Init();
-    SystemClock_Config();
-    BSP_SDRAM_Init();
-    BSP_LCD_Init();
-    // ADC
+    HAL_Init(); // Inicjalizacja HAL
+    SystemClock_Config(); // Konfiguracja zegara
+    BSP_SDRAM_Init(); // Inicjalizacja SDRAM
+    BSP_LCD_Init(); // Inicjalizacja LCD
+    // Konfiguracja ADC
     GPIOA->MODER |= GPIO_Mode_AN << (5 * 2);
     GPIOA->MODER |= GPIO_Mode_AN << (7 * 2);
     GPIOC->MODER |= GPIO_Mode_AN << (3 * 2);
@@ -256,15 +262,16 @@ void System_Init() {
     ADC3->JSQR = 4 << 3 * 5;
     ADC1->CR1 |= ADC_CR1_SCAN;
     RCC->AHB1ENR |= 1 << 2;
-    // Przyciski
+    // Konfiguracja przycisków
     GPIOC->PUPDR |= 1 << (11 * 2);
     GPIOC->PUPDR |= 1 << (12 * 2);
-    // Obsługa przerwania z okresem 1ms
+    // Przerwanie SysTick co 1ms
     SysTick->LOAD = (180000) - 1UL;
     SysTick->CTRL = 7UL;
     *((unsigned long*)(SCB->VTOR + 0x3c)) = (unsigned long)SysTick_IRQ;
 }
 
+// Przerwanie SysTick - obsługa zegara i licznika bezczynności
 void SysTick_IRQ() {
     g_zegar.free_milis++;
     if (g_zegar.free_milis == 1000) {
@@ -281,10 +288,11 @@ void SysTick_IRQ() {
     spoczynek++;
 }
 
+// Kopiowanie bufora LCD i czyszczenie bufora roboczego
 void Clear_And_Reload_Screen() {
     for (int off = 0; off < 320 * 240; off++) {
-        LCD_FB[off] = LCD_BUF[off];
-        LCD_BUF[off] = 0;
+        LCD_FB[off] = LCD_BUF[off]; // Przenieś piksele na ekran
+        LCD_BUF[off] = 0;           // Wyczyść bufor roboczy
     }
 }
 

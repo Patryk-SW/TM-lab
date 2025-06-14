@@ -1,101 +1,82 @@
-;Oznaczenie pamieci
-;BIT, CODE, DATA, IDATA, XDATA, NUMBER
+; Plik asemblera - funkcje pomocnicze do mikrokontrolera 8051
+; Każda sekcja i linia została opisana poniżej
 
-;Wejscie
-;Arg Number               char, 1-byte ptr       int, 2-byte ptr                long, float                         generic ptr
+; Oznaczenie typów pamięci
+; BIT, CODE, DATA, IDATA, XDATA, NUMBER
+
+; Opis przekazywania argumentów do funkcji
+; Wejście
+; Arg Number               char, 1-byte ptr       int, 2-byte ptr                long, float                         generic ptr
 ;    1                          R7                   R6 & R7                       R4—R7                              R1—R3
-;                                             (MSB in R6,LSB in R7)           (MSB in R4,LSB in R7)      (Mem type in R3, MSB in R2, LSB in R1)
+;                                             (MSB w R6,LSB w R7)           (MSB w R4,LSB w R7)      (Mem type w R3, MSB w R2, LSB w R1)
 ;    2                          R5                   R4 & R5                       R4—R7                              R1—R3
-;                                             (MSB in R4,LSB in R5)           (MSB in R4,LSB in R7)      (Mem type in R3, MSB in R2, LSB in R1)
+;                                             (MSB w R4,LSB w R5)           (MSB w R4,LSB w R7)      (Mem type w R3, MSB w R2, LSB w R1)
 ;    3                          R3                   R2 & R3                     ----------                           R1—R3
-;                                             (MSB in R2,LSB in R3)                                      (Mem type in R3, MSB in R2, LSB in R1)
+;                                             (MSB w R2,LSB w R3)                                      (Mem type w R3, MSB w R2, LSB w R1)
 
-;Wyjscie
-;bit                                 - Carry bit
-;char, unsigned char, 1-byte pointer - R7 
-;int, unsigned int, 2-byte ptr       - R6 & R7 MSB in R6, LSB in R7. 
-;long,  unsigned long                - R4-R7 MSB in R4, LSB in R7. 
-;float R4-R7                         - 32-Bit IEEE format. 
-;generic pointer                     - R1-R3 Memory type in R3, MSB R2, LSB R1. 
+; Wyjście
+; bit                                 - Carry bit
+; char, unsigned char, 1-byte pointer - R7 
+; int, unsigned int, 2-byte ptr       - R6 & R7 MSB w R6, LSB w R7. 
+; long,  unsigned long                - R4-R7 MSB w R4, LSB w R7. 
+; float R4-R7                         - 32-Bit IEEE format. 
+; generic pointer                     - R1-R3 Memory type w R3, MSB R2, LSB R1. 
 
-;Upublicznie (udostepnienie na zewnatrz) symbolu zwiazanego z procedura/funkcja (jesli przyjmuje argumenty wejsciowe, to wymaga uzupelnienia symbolu dodatkowym znakiem "podlogi")
-		PUBLIC  _WAIT_10US_ASM
-		PUBLIC  INWERSJAP1_6_ASM
-		
-;Zdefiniowanie segmentu kodu wynikowego 				
+; Udostępnienie symboli na zewnątrz (publiczne funkcje)
+        PUBLIC  _WAIT_10US_ASM      ; Opóźnienie 10us
+        PUBLIC  INWERSJAP1_6_ASM    ; Inwersja bitu P1.6
+
+; Definicja segmentu kodu
 PRGSEG  SEGMENT CODE
-		RSEG    PRGSEG
-;Definicja procedury realizujacej opoznienie czasowe bedace dopelnieniem do wartosci maksymalnej 16-bitowej
+        RSEG    PRGSEG
+
+; Procedura: Opóźnienie czasowe (dopełnienie do wartości maksymalnej 16-bitowej)
 _WAIT_10US_ASM:
-; Odebranie argumentu wejsciowego podanego przy wywolaniu procedury
-		MOV DPL,R7   ;Umieszcza mlodszy bajty argumentu wejsciowego w mlodszym bajcie rejestru DPTR (DPL)
-		MOV DPH,R6   ;Umieszcza starszy bajt argumentu wejsciowego w starszym bajcie rejestru DPTR (DPH)
-;Petla opozniajaca wykorzystujaca wartosc rejestru DPTR jako zmienna iteracyjna			
+    MOV DPL,R7   ; Umieszcza młodszy bajt argumentu w DPL
+    MOV DPH,R6   ; Umieszcza starszy bajt argumentu w DPH
 WAIT_U:
-; czterokrotne wykonanie instrukcji NOP, implementujce opoznienie 4us w celu zapewnienia opoznienia rownego 10us dla jednej iteracji petli
-		NOP
-		NOP
-		NOP
-		NOP
-;Zwiekszenie DPTR o jeden
-		INC DPTR
-;Przeslanie do akumulatora starszego bajtu DPTR-a
-		MOV A,DPH
-;Wykonanie sumy logicznej miedzy akumulatorenm a mlodszym bajtem DPTR w celu przygotwania akumulatora do sprawdzenia czy rejestr DPTR ulegl wyzerowaniu
-		ORL A,DPL
-;Sprawdzenie niezerowego stanu rejestru DPTR poprzez weryfikacje stanu akumulatora ustalonego poprzednia instrukcja sumy logicznej
-;Wykonanie skoku do kolejnej iteracji petli jesli akumulator jest rozny od zera (oparciu o powyzsze instrukcji rowniez jesli DPTR jest rozny od zera)
-		JNZ WAIT_U
-;Powrot z procedury		
-		RET
-;Etykieta rozpoczynajaca procedure INWERSJAP1_6_A
+    NOP          ; 4x NOP = 4us (razem z pętlą daje ok. 10us na iterację)
+    NOP
+    NOP
+    NOP
+    INC DPTR     ; Zwiększ DPTR o 1
+    MOV A,DPH    ; Przenieś starszy bajt DPTR do akumulatora
+    ORL A,DPL    ; Sumuj logicznie z młodszym bajtem DPTR
+    JNZ WAIT_U   ; Jeśli DPTR ≠ 0, powtórz pętlę
+    RET          ; Powrót z funkcji
+
+; Procedura: Inwersja bitu 6 portu P1 (dioda L8)
 INWERSJAP1_6_ASM:
-; Inwersja bitu 6 portu P1, ktory steruje dioda L8
-	CPL P1.6 
-;Powrot z procdury (podprogramu) - skok bezwarunkowy pod adres zapisany na stosie
-	RET
+    CPL P1.6     ; Zmień stan bitu P1.6
+    RET          ; Powrót z funkcji
 
-; Procedura kopiujaca stany przycisków X0..X5 na diody L0..L5
-; PTWE - rejestr wejsciowy (przyciski), adres 0x8008
-; PTWY - rejestr wyjsciowy (diody), adres 0x8008
-
-	PUBLIC STERUJ_DIODY_X0_X5
-
+; Procedura: Kopiowanie stanów przycisków X0..X5 na diody L0..L5
+; PTWE - rejestr wejściowy (przyciski), adres 0x8008
+; PTWY - rejestr wyjściowy (diody), adres 0x8008
+        PUBLIC STERUJ_DIODY_X0_X5
 SEGMENT_CODE SEGMENT CODE
-	RSEG SEGMENT_CODE
-
+        RSEG SEGMENT_CODE
 STERUJ_DIODY_X0_X5:
-	; Odczytaj stan przycisków X0-X5
-	MOV DPTR, #0x8008     ; Adres PTWE/PTWY
-	MOVX A, @DPTR         ; Odczytaj bajt z PTWE
+    MOV DPTR, #0x8008     ; Ustaw adres PTWE/PTWY
+    MOVX A, @DPTR         ; Odczytaj bajt z PTWE
+    ANL A, #00111111b     ; Zamaskuj tylko bity 0-5
+    CPL A                 ; Odwróć logikę (przycisk wciśnięty = LED ON)
+    MOVX @DPTR, A         ; Zapisz do PTWY (ten sam adres)
+    RET
 
-	; Zamaskuj tylko bity 0-5 (pozostale wyzeruj)
-	ANL A, #00111111b     ; Zostaw tylko bity 0-5
-	; Wpisz stan na diody L0-L5 (PTWY)
-	CPL A 				  ; Odwrócenie logiki (przycisk wcisniety==LED ON)
-	MOVX @DPTR, A         ; Zapisz do PTWY (adres ten sam)
-	
-	RET
-
-; Procedura: Zmien stan diody L8 (P1.6), poczekaj zadany czas
+; Procedura: Zmień stan diody L8 (P1.6), poczekaj zadany czas
 ; Argument: delay (unsigned int) w R6 (MSB) i R7 (LSB)
-
         PUBLIC  _TOGGLE_L8_DELAY
-        
-
 CODESEG SEGMENT CODE
         RSEG CODESEG
-
 _TOGGLE_L8_DELAY:
-        CPL P1.6
-
-        MOV  A, R7
-        MOV  DPL, A
-        MOV  A, R6
-        MOV  DPH, A
-        LCALL _WAIT_10US_ASM
-
-        RET
+    CPL P1.6              ; Zmień stan diody L8
+    MOV  A, R7            ; Przenieś LSB opóźnienia do DPL
+    MOV  DPL, A
+    MOV  A, R6            ; Przenieś MSB opóźnienia do DPH
+    MOV  DPH, A
+    LCALL _WAIT_10US_ASM  ; Wywołaj opóźnienie
+    RET                   ; Powrót z funkcji
 
    
 ;---------------------------------------------------------------
