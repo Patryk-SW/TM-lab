@@ -1,0 +1,250 @@
+main.c
+
+#include "main.h"
+
+//Definicja symbolu umozliwiajacego wykorzystanie zaimplementowanych w asemblerze przykladowych procedur
+//#define ASM_EXAMPLE
+unsigned char xdata PTAC _at_ 0x8000;
+unsigned char xdata POT0 _at_ 0x8005;
+unsigned char xdata POT1 _at_ 0x8006;
+unsigned char xdata POT2 _at_ 0x8007;
+unsigned char xdata PTSEG  _at_ 0x8018;
+unsigned char xdata PTWE _at_ 0x8008;
+unsigned char xdata PTWY _at_ 0x8008; // Deklaracja i definicja rejestru portu sterujacego diodami L0-L7
+unsigned char xdata LCDBUF[32];				// Deklaracja i definicja bufora pomocniczego łańcucha tekstowego wyświetlacza LCD 2x16 znakow
+unsigned char Pomiar;						// Deklaracja i definicja 8-mio bitowego licznika binarnego
+unsigned int Napiecie;
+//Deklaracje zmiennych pomocniczych
+unsigned char  presc=0; // Licznik preskalera czestotliwosci wywolywania podalgorytmu w przerwaniu
+unsigned char Modul7Seg=0; // Licznik kontrolujacy multipleksowanie wyswietlaczy 7-seg
+bit flag=0;	// Flaga synchornizacji programu glownego z przerwaniem czasowym
+unsigned char liczba[10]={0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+unsigned int POMIARY[4] = {0,0,0,0};
+
+
+
+unsigned char OdczytPrzycisku(){
+	if(!(PTWE&1)&&PTWE&2&&PTWE&4) return 1;
+	else if(!(PTWE&2)&&PTWE&1&&PTWE&4) return 2;
+	else if(!(PTWE&4)&&PTWE&2&&PTWE&1) return 3;
+	else return 0;
+}
+void Wysteruj7SEG(unsigned char Przycisk){
+	P1=P1&3;
+	switch(Przycisk){
+		case 0:
+			PTSEG=0x3F;
+			break;
+		case 1:
+			PTSEG=0x06;
+			break;
+		case 2:
+			PTSEG=0x5B;
+			break;
+		case 3:
+			PTSEG=0x4F;
+			break;
+	}
+	}
+
+unsigned char PomiarADC(unsigned char a_Przycisk,unsigned char xdata *a_LCDBUF){
+	unsigned char KanalAnalogowy=a_Przycisk;
+	switch(KanalAnalogowy){
+		case 1:
+			POT0=0;
+			strncpy(&a_LCDBUF[16],"Nr: 0",16);
+			break;
+		case 2:
+			POT1=0;
+			strncpy(&a_LCDBUF[16],"Nr: 1",16);
+			break;
+		case 3:
+			POT2=0;
+			strncpy(&a_LCDBUF[16],"Nr: 2",16);
+			break;
+		default:
+			break;
+	}
+	WAIT_10US(12);
+	return PTAC;
+	}
+unsigned long int ADCtoVoltage(unsigned char a_Pomiar){
+	unsigned int a_Napiecie=(float)(5000.0/255.0)*a_Pomiar;
+	return a_Napiecie;
+}	
+void Konwersja7Seg(unsigned int a_Napiecie){
+		POMIARY[2]=((a_Napiecie/1000)%10);
+		POMIARY[1]=((a_Napiecie/100)%10);
+		POMIARY[0]=((a_Napiecie/10)%10);
+}
+
+
+//Procedura opóźnienia czasowego o czasie równym 10*wait mikrosekund. 
+void WAIT_10US(unsigned int wait){
+#ifdef ASM_EXAMPLE
+	WAIT_10US_ASM(-wait);			// Wywołanie procedury implementującej w asemblerze opóźnienie równe 10*wait mikrosekund. 
+#else
+	wait=(wait*10UL)/11UL;
+	while(--wait) _nop_();			// Minimalnie 11 cykli (maksymalnie 12 cykli) maszynowych (mikrosekund) na iteracje pętli przy kompilacji C51v.9.60.7.0 z maksymalną optymalizacją
+#endif
+}
+
+ 
+
+
+
+
+//Procedura obslugi przerwania od licznika programowalnego 0
+void IRT_TIMER0() interrupt 1 {
+  //Reinicjalizacja stanu poczatkowego licznika 0 (-2500 <=> okres do przpelnienia licznika = 2500us)
+  TH0=(-2500)>>8;		// Starszy bajt zwiazany z liczba -2500 zapisany w kodzie U2
+  TL0=(-2500)&0xff;		// Mlodszy bajt zwiazany z liczba -2500 zapisany w kodzie U2
+
+  flag=1;		// Informacja zwrotna do programu glownego o uplywie czasu 2500us
+
+//Preskaler czestotliwosci wywolywania podalgorytmu w przerwaniu, wymuszajacy jego prace z okresm 200*2,5ms=500ms
+  if(++presc==200)
+	{	
+			presc=0; 
+	}
+//Implementacja licznika modulo 4 sluzacego do multipleksowania wyswietlaczy 7-seg
+Modul7Seg=++Modul7Seg&3;
+//Wygaszenie segmentow przed zmiana zailania modulu 7-seg
+PTSEG=0;
+//Wysterowanie wybranego modulu 7-seg - multipleskowanie
+P1=Modul7Seg;
+//Wysterowanie segmentow wyswietlacza 7-seg informacja zbiorcza zwiazana ze stanem multipleksu i przyciskami MKD51
+// Wyswietlanie cyfry
+    if (Modul7Seg == 2)
+        PTSEG = liczba[POMIARY[Modul7Seg]] | 0x80; // kropka
+		else
+        PTSEG = liczba[POMIARY[Modul7Seg]];
+
+}	
+
+void main(void) {
+		strncpy(LCDBUF,     "Potencjometr",16); // Inicjalizacja tekstu w pierwszym wierszu bufora pomocniczego W_LCD
+	  strncpy(&LCDBUF[16],"Nr:",16); // Inicjalizacja tekstu w drugim wierszu bufora pomocniczego W_LCD
+		prglcd();						// Inicjalizacja wyswietlacza W_LCD
+		TMOD=1;			// Ustawienie licznika 0 do pracy w trybie 1 i zliczania wewnetrznych impulsow zegarowych o okresie rownym 1us
+// Inicjalizacja stanu poczatkowego licznika 0 (-2500 <=> okres do przepelnienia licznika = 2500us)
+		TH0=(-2500)>>8;		// Starszy bajt zwiazany z liczba -2500 zapisany w kodzie U2
+		TL0=(-2500)&0xff;	// Mlodszy bajt zwiazany z liczba -2500 zapisany w kodzie U2
+		IE=0x82;			// Odblokowanie przerwan poprzez odblokowanie przerwania od licznika 0 bitem ET0 oraz ustawienie globalnego zezwolenia na wykonywanie przerwan bitem EA
+		TCON=0x10;			// Uruchomienie licznika poprzez ustawienie bitu TR0
+		
+	while(1){							// Nieskończona pętla główna
+		//Wysteruj7SEG(OdczytPrzycisku());
+		Pomiar=PomiarADC(OdczytPrzycisku(),LCDBUF);
+		Napiecie=ADCtoVoltage(Pomiar);
+		Konwersja7Seg(Napiecie);
+		//KonwersjaDoLCDBUF(Napiecie,LCDBUF);
+		disptext(LCDBUF);		// Wysłanie tekstowego bufora pomocniczego LCDBUF do sterownika wyświetlacza W_LCD
+		STERUJ_DIODY_X0_X5();
+	}
+}
+
+---------------------------------------------------------------------
+main.h
+
+#include <intrins.h>
+#include <reg52.h>
+#include <intrins.h>
+#include "lcd.h"
+#include "mkd51sim.h"
+#include <string.h>
+
+void WAIT_10US_ASM(unsigned int negative_wait);
+void WAIT_10US(unsigned int wait);
+void INWERSJAP1_6_ASM(void);
+void INWERSJAP1_6(void);
+unsigned char PomiarADC();
+unsigned long int ADCtoVoltage(unsigned char a_Pomiar);
+void KonwersjaDoLCDBUF(unsigned long int a_Napiecie,unsigned char xdata *a_LCDBUF);
+unsigned int LicznikModuloN(unsigned int a_Napiecie);
+void STERUJ_DIODY_X0_X5(void);
+
+---------------------------------------------------------------------
+assembly.a51
+
+;Oznaczenie pamieci
+;BIT, CODE, DATA, IDATA, XDATA, NUMBER
+
+;Wejscie
+;Arg Number               char, 1-byte ptr       int, 2-byte ptr                long, float                         generic ptr
+;    1                          R7                   R6 & R7                       R4—R7                              R1—R3
+;                                             (MSB in R6,LSB in R7)           (MSB in R4,LSB in R7)      (Mem type in R3, MSB in R2, LSB in R1)
+;    2                          R5                   R4 & R5                       R4—R7                              R1—R3
+;                                             (MSB in R4,LSB in R5)           (MSB in R4,LSB in R7)      (Mem type in R3, MSB in R2, LSB in R1)
+;    3                          R3                   R2 & R3                     ----------                           R1—R3
+;                                             (MSB in R2,LSB in R3)                                      (Mem type in R3, MSB in R2, LSB in R1)
+
+;Wyjscie
+;bit                                 - Carry bit
+;char, unsigned char, 1-byte pointer - R7 
+;int, unsigned int, 2-byte ptr       - R6 & R7 MSB in R6, LSB in R7. 
+;long,  unsigned long                - R4-R7 MSB in R4, LSB in R7. 
+;float R4-R7                         - 32-Bit IEEE format. 
+;generic pointer                     - R1-R3 Memory type in R3, MSB R2, LSB R1. 
+
+;Upublicznie (udostepnienie na zewnatrz) symbolu zwiazanego z procedura/funkcja (jesli przyjmuje argumenty wejsciowe, to wymaga uzupelnienia symbolu dodatkowym znakiem "podlogi")
+		PUBLIC  _WAIT_10US_ASM
+		PUBLIC  INWERSJAP1_6_ASM
+		
+;Zdefiniowanie segmentu kodu wynikowego 				
+PRGSEG  SEGMENT CODE
+		RSEG    PRGSEG
+;Definicja procedury realizujacej opoznienie czasowe bedace dopelnieniem do wartosci maksymalnej 16-bitowej
+_WAIT_10US_ASM:
+; Odebranie argumentu wejsciowego podanego przy wywolaniu procedury
+		MOV DPL,R7   ;Umieszcza mlodszy bajty argumentu wejsciowego w mlodszym bajcie rejestru DPTR (DPL)
+		MOV DPH,R6   ;Umieszcza starszy bajt argumentu wejsciowego w starszym bajcie rejestru DPTR (DPH)
+;Petla opozniajaca wykorzystujaca wartosc rejestru DPTR jako zmienna iteracyjna			
+WAIT_U:
+; czterokrotne wykonanie instrukcji NOP, implementujce opoznienie 4us w celu zapewnienia opoznienia rownego 10us dla jednej iteracji petli
+		NOP
+		NOP
+		NOP
+		NOP
+;Zwiekszenie DPTR o jeden
+		INC DPTR
+;Przeslanie do akumulatora starszego bajtu DPTR-a
+		MOV A,DPH
+;Wykonanie sumy logicznej miedzy akumulatorenm a mlodszym bajtem DPTR w celu przygotwania akumulatora do sprawdzenia czy rejestr DPTR ulegl wyzerowaniu
+		ORL A,DPL
+;Sprawdzenie niezerowego stanu rejestru DPTR poprzez weryfikacje stanu akumulatora ustalonego poprzednia instrukcja sumy logicznej
+;Wykonanie skoku do kolejnej iteracji petli jesli akumulator jest rozny od zera (oparciu o powyzsze instrukcji rowniez jesli DPTR jest rozny od zera)
+		JNZ WAIT_U
+;Powrot z procedury		
+		RET
+;Etykieta rozpoczynajaca procedure INWERSJAP1_6_A
+INWERSJAP1_6_ASM:
+; Inwersja bitu 6 portu P1, ktory steruje dioda L8
+	CPL P1.6 
+;Powrot z procdury (podprogramu) - skok bezwarunkowy pod adres zapisany na stosie
+	RET
+
+; Procedura kopiujaca stany przycisków X0..X5 na diody L0..L5
+; PTWE - rejestr wejsciowy (przyciski), adres 0x8008
+; PTWY - rejestr wyjsciowy (diody), adres 0x8008
+
+	PUBLIC STERUJ_DIODY_X0_X5
+
+SEGMENT_CODE SEGMENT CODE
+	RSEG SEGMENT_CODE
+
+STERUJ_DIODY_X0_X5:
+	; Odczytaj stan przycisków X0-X5
+	MOV DPTR, #0x8008     ; Adres PTWE/PTWY
+	MOVX A, @DPTR         ; Odczytaj bajt z PTWE
+
+	; Zamaskuj tylko bity 0-5 (pozostale wyzeruj)
+	ANL A, #00111111b     ; Zostaw tylko bity 0-5
+	; Wpisz stan na diody L0-L5 (PTWY)
+	CPL A 				  ; Odwrócenie logiki (przycisk wcisniety==LED ON)
+	MOVX @DPTR, A         ; Zapisz do PTWY (adres ten sam)
+	
+	RET
+
+;Dyrektywa asemblera konczaca kod zrodlowy
+	END

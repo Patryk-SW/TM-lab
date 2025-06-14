@@ -1,0 +1,30 @@
+assembly
+
+handleGPIO_asm:
+    LDR   r1, =0x40020010    // GPIOA->IDR (przycisk B1)
+    LDR   r0, [r1]
+    ANDS  r0, r0, #1         // Sprawdź bit 0
+    BEQ   gpio_off
+
+    // Przycisk wciśnięty – zaświeć LED (GPIOG, pin 14)
+    LDR   r1, =0x40021818    // GPIOG->BSRR
+    MOV   r2, #(1 << 14)     // Set bit 14
+    STR   r2, [r1]
+    MOVS  r0, #1             // Zwróć 1
+    BX    lr
+
+gpio_off:
+    // Przycisk puszczony – zgaś LED (GPIOG, pin 14)
+    LDR   r1, =0x40021818
+    MOV   r2, #(1 << (14+16)) // Reset bit 14
+    STR   r2, [r1]
+    MOVS  r0, #0             // Zwróć 0
+    BX    lr
+---------------
+main.h
+uint8_t handleGPIO_asm(void);
+---------------
+main.c
+void handleGPIO(void) {
+    Stan = handleGPIO_asm();
+}

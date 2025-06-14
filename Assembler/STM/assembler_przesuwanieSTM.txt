@@ -1,0 +1,693 @@
+main.c 
+
+
+#include "main.h"
+
+unsigned short int *const LCD_FB = (unsigned short int*) 0xD0000000;
+unsigned short int *const LCD_BUF = (unsigned short int*) 0xD0100000;
+
+
+enum AppState_t {A_MenuGlowne,A_AnimPodswietleniaMenu,A_AktywacjaWyboruMenu,A_Oswietlenie,A_Ogrzewanie,A_Alarm,A_oAplikacji};
+enum AppState_t AppState=A_MenuGlowne;
+
+enum PozycjeMenu_t {M_Oswietlenie=0,M_Ogrzewanie=1,M_Alarm=2,M_oAplikacji=3};
+unsigned short int PozycjePionoweWpisowMenu[]={20,50,80,150};
+enum  PozycjeMenu_t KolejnePozycjeMenu[]={M_Ogrzewanie,M_Alarm,M_oAplikacji,M_oAplikacji};
+enum  PozycjeMenu_t PoprzedniePozycjeMenu[]={M_Oswietlenie,M_Oswietlenie,M_Ogrzewanie,M_Alarm};
+enum  PozycjeMenu_t AktualnaPozycjaMenu=M_Alarm;
+enum  PozycjeMenu_t KolejnaPozycjaMenu;
+unsigned int MenuActivationTimer;
+unsigned int MenuAnimationTimer;
+unsigned int first_entry;
+unsigned int pomiar1, pomiar2, pomiar3, pomiar4;
+int Stan;
+unsigned int GetJoyPos(void)
+{
+	//a. ADC START
+	ADC1->CR2|=ADC_CR2_JSWSTART;
+	ADC3->CR2|=ADC_CR2_JSWSTART;
+	//b. ADC CZEKAJ NA ZAKOŃCZENIE POMIARU
+	while(!(ADC1->SR&ADC_SR_JEOC));
+	//c. ADC POBIERZ POMIAR
+	pomiar1=ADC1->JDR1;
+	pomiar2=ADC1->JDR2;
+	pomiar3=ADC1->JDR3;
+	pomiar4=ADC3->JDR1;
+	ADC1->SR&=~ADC_SR_JEOC;
+	ADC3->SR&=~ADC_SR_JEOC;
+
+	return pomiar1;
+}
+
+unsigned int GetButton9(void)
+{
+	return GPIOC->IDR&(1<<11);
+}
+unsigned int GetButton10(void)
+{
+	return GPIOC->IDR&(1<<12);
+}
+
+void WypiszMenu(){
+	BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_Oswietlenie], (uint8_t*) "Oswietlenie", 1);
+	BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_Ogrzewanie], (uint8_t*) "Ogrzewanie", 1);
+	BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_Alarm], (uint8_t*) "Alarm", 1);
+	BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[M_oAplikacji], (uint8_t*) "O aplikacji", 1);
+	}
+
+void MEMORY_RANGE_RGB_SET(int RGB, unsigned short int* MEM, int SIZE);
+
+
+void RysujPodswietlenie(unsigned int pozycja) {
+	uint16_t* start = LCD_BUF + pozycja * LCD_WIDTH + 90;
+	int width=200;
+		for (int i = 0; i < 15; i++) {
+				MEMORY_RANGE_RGB_SET(0x001f, start, width);
+				start += LCD_WIDTH + 3;
+}
+}
+
+int main(void) {
+	System_Init();
+	while (1) {
+		switch(AppState)
+		{
+		case A_MenuGlowne:
+			first_entry=1;
+			RysujPodswietlenie(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]);
+			//MENU_HIGHLIGHT(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]);
+			WypiszMenu();
+			handleGPIO();
+			 if(!(GetButton9())) {
+				AppState=A_AktywacjaWyboruMenu;
+				MenuActivationTimer=20;
+				break;
+			}
+			unsigned int JPos=GetJoyPos();
+			if(JPos>3000)
+			{
+				MenuAnimationTimer=5;
+				AppState=A_AnimPodswietleniaMenu;
+				KolejnaPozycjaMenu=KolejnePozycjeMenu[AktualnaPozycjaMenu];
+			}
+			if(JPos<1000)
+			{
+				MenuAnimationTimer=5;
+				AppState=A_AnimPodswietleniaMenu;
+				KolejnaPozycjaMenu=PoprzedniePozycjeMenu[AktualnaPozycjaMenu];
+			}
+			break;
+
+		case A_AnimPodswietleniaMenu:
+			MenuAnimationTimer--;
+
+			//Animacja paska podświetlania
+			handleGPIO();
+			RysujPodswietlenie(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]);
+			//MENU_HIGHLIGHT(PozycjePionoweWpisowMenu[AktualnaPozycjaMenu]);
+			WypiszMenu();
+			if(MenuAnimationTimer==0)
+			{
+				AktualnaPozycjaMenu=KolejnaPozycjaMenu;
+				AppState=A_MenuGlowne;
+			}
+			break;
+
+		case A_AktywacjaWyboruMenu:
+			MenuActivationTimer--;
+
+			//Mrugnięcie diodą LED
+
+			if (MenuActivationTimer==0){
+				switch(AktualnaPozycjaMenu)
+						{
+						case M_Oswietlenie: AppState=A_Oswietlenie; break;
+						case M_Ogrzewanie: AppState=A_Ogrzewanie; break;
+						case M_Alarm: AppState=A_Alarm; break;
+						case M_oAplikacji: AppState=A_oAplikacji;break;
+						}
+		    }
+			break;
+
+		case A_Oswietlenie:
+		// Obsługa wyboru oswietlenia w menu, z możliwością powrotu do menu głównego
+			GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2);
+			if (first_entry == 1) {
+		     GPIOG->BSRR = GPIO_Pin_13;
+			 for (volatile int i = 0; i < 100000; i++);
+			 GPIOG->BSRR = GPIO_Pin_13 << 16;
+			 first_entry = 0;
+			 }
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[0], (uint8_t*) "Oswietlenie", 1);
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[1], (uint8_t*) "Powrot", 1);
+			if (!(GetButton10())) {AppState = A_MenuGlowne;}
+			while (!(GetButton10()));
+			break;
+		case A_Ogrzewanie:
+		// Obsługa wyboru ogrzewania w menu, z możliwością powrotu do menu głównego
+			GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2);
+			if (first_entry == 1) {
+			GPIOG->BSRR = GPIO_Pin_13;
+			for (volatile int i = 0; i < 100000; i++);
+			GPIOG->BSRR = GPIO_Pin_13 << 16;
+			first_entry = 0;
+			}
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[0], (uint8_t*) "Ogrzewanie", 1);
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[1], (uint8_t*) "Powrot", 1);
+			if (!(GetButton10())) {AppState = A_MenuGlowne;}
+			while (!(GetButton10()));
+			break;
+		case A_Alarm:
+		// Obsługa wyboru alarmu w menu, z możliwością powrotu do menu głównego
+			GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2);
+			if (first_entry == 1) {
+			GPIOG->BSRR = GPIO_Pin_13;
+			for (volatile int i = 0; i < 10000; i++);
+			GPIOG->BSRR = GPIO_Pin_13 << 16;
+			first_entry = 0;
+			}
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[0], (uint8_t*) "Alarm", 1);
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[1], (uint8_t*) "Powrot", 1);
+			if (!(GetButton10())) {AppState = A_MenuGlowne;}
+			while (!(GetButton10()));
+			break;
+		case A_oAplikacji:
+		// Obsługa wyboru opcji "o aplikacji" w menu, z możliwością powrotu do menu głównego
+			GPIOG->MODER |= GPIO_Mode_OUT << (13 * 2);
+			if (first_entry == 1) {
+			GPIOG->BSRR = GPIO_Pin_13;
+			for (volatile int i = 0; i < 10000; i++);
+			GPIOG->BSRR = GPIO_Pin_13 << 16;
+			first_entry = 0;
+			}
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[0], (uint8_t*) "o Aplikacji", 1);
+			BSP_LCD_DisplayStringAt(0, PozycjePionoweWpisowMenu[1], (uint8_t*) "Powrot", 1);
+			if (!(GetButton10())) {AppState = A_MenuGlowne;}
+			while (!(GetButton10()));
+			break;
+		}
+		Clear_And_Reload_Screen();
+	}
+}
+void handleGPIO(void) {
+    Stan = handleGPIO_asm();
+}
+
+void SysTick_Handler(void) {
+	HAL_IncTick();
+}
+
+
+void System_Init() {
+	HAL_Init();
+	SystemClock_Config();
+	BSP_SDRAM_Init();
+	BSP_LCD_Init();
+
+	//ADC
+	GPIOA->MODER|=GPIO_Mode_AN<<(5*2);
+	GPIOA->MODER|=GPIO_Mode_AN<<(7*2);
+	GPIOC->MODER|=GPIO_Mode_AN<<(3*2);
+	GPIOF->MODER|=GPIO_Mode_AN<<(6*2);
+	RCC->APB2ENR|=RCC_APB2ENR_ADC1EN;
+	RCC->APB2ENR|=RCC_APB2ENR_ADC3EN;
+	ADC1->CR2=ADC_CR2_ADON;
+	ADC3->CR2=ADC_CR2_ADON;
+	ADC1->JSQR=2<<4*5 | 13<<3*5 | 5<<2*5 | 7<<1*5;
+	ADC3->JSQR=4<<3*5;
+	ADC1->CR1|=ADC_CR1_SCAN;
+	RCC->AHB1ENR|=1<<2;
+	//Przyciski
+	GPIOC->PUPDR|=1<<(11*2);
+	GPIOC->PUPDR |= 1 << (12 * 2);
+}
+
+void Clear_And_Reload_Screen() {
+	for (int off = 0; off < 320*240; off++) {
+		LCD_FB[off]=LCD_BUF[off];
+		LCD_BUF[off]=0;
+	}
+}
+
+
+
+---------------------
+main.h
+
+#include <stdint.h>
+#include <stdio.h>
+#include "stm32f429xx.h"
+#include "stm32f4xx_gpio.h"
+
+#define LCD_WIDTH 320U
+#define LCD_HEIGHT 240U
+#define LCD_LAST_X 318U
+#define LCD_LAST_Y 239U
+
+#define MAX_R 31U
+#define MAX_G 63U
+#define MAX_B 31U
+
+typedef struct {
+	long long free_milis;
+	int secs;
+	int mins;
+	} zegar_t;
+
+
+typedef   struct {
+	unsigned int x, y;
+	} __attribute__((packed,aligned(4))) kwadrat_t ;
+
+#define ABS(x) ((unsigned int)(x>=0?x:-x))
+
+typedef enum
+{
+  CENTER_MODE             = 0x01,    /* center mode */
+  RIGHT_MODE              = 0x02,    /* right mode  */
+  LEFT_MODE               = 0x03,    /* left mode   */
+}Text_AlignModeTypdef;
+typedef enum
+{
+  HAL_OK       = 0x00U,
+  HAL_ERROR    = 0x01U,
+  HAL_BUSY     = 0x02U,
+  HAL_TIMEOUT  = 0x03U
+} HAL_StatusTypeDef;
+
+unsigned int GetButton9(void);
+unsigned int GetButton10(void);
+void RysujPodswietlenie(unsigned int pozycja);
+void WypiszMenu(void);
+
+//Dodałam:
+void PrzyciemnijEkran(void);
+void Zegar(void);
+void SysTick_IRQ();
+
+unsigned int GetJoyPos(void);
+void System_Init(void);
+HAL_StatusTypeDef HAL_Init(void);
+void SystemClock_Config(void);
+void Clear_And_Reload_Screen(void);
+void drawElements(void );
+void printMenu(void);
+void BSP_SDRAM_Init(void);
+void BSP_LCD_Init(void);
+void BSP_LCD_DisplayStringAt(uint16_t X, uint16_t Y, uint8_t *pText, Text_AlignModeTypdef mode);
+void BSP_LCD_DisplayRot90StringAt(uint16_t X, uint16_t Y, uint8_t *pText, Text_AlignModeTypdef mode);
+
+void move_square_asm(void);
+void kopiuj_blok_pamieci(unsigned short int* FROM,unsigned short int* INTO,int SIZE);
+void kasuj_blok_pamieci(unsigned short int* WHERE,int SIZE);
+unsigned short int RGB16Pack(unsigned int B,unsigned int G,unsigned int R);
+void fillMemory(void* adres_bazowy, unsigned long rozmiar,unsigned short int wartosc);
+void SysTick_Handler(void);
+void HAL_IncTick(void);
+void RysujPodswietlenie(unsigned int pozycja);
+void MEMORY_RANGE_RGB_SET(int RGB, unsigned short int* MEM, int SIZE);
+void LCD_BUF_RANGE_SET(int RGB, int y, int SIZE);
+void MENU_HIGHLIGHT(int POSITION);
+uint8_t handleGPIO_asm(void);
+
+
+---------------------
+
+assembly
+
+@Korzystaj ze składni UAL
+   .syntax unified
+@Definicje stałych
+  .set PRESCALER_MAX,50
+  .set PERIPH_BASE,0x40000000
+  .set AHB1PERIPH_OFFSET, 0x00020000
+  .set GPIOG_BASE,PERIPH_BASE+AHB1PERIPH_OFFSET+0x1800
+  .set BSRR_OFFSET,0x18
+  .set x_field_offset,0
+  .set y_field_offset,4
+
+@Definicja symboli globalnych (sprowadzanych do asemblera i udostępnianych dla języka C)
+ .global move_square_asm
+ .global RGB16Pack
+ .global kopiuj_blok_pamieci
+ .global kasuj_blok_pamieci
+ .global kwadrat
+  .global fillMemory
+.global handleGPIO_asm
+.global LCD_DrawPixel_asm
+.global LCD_DrawLine_asm
+.global MENU_HIGHLIGHT
+.global MEMORY_RANGE_RGB_SET
+.global LCD_BUF_RANGE_SET
+
+@Tworzenie sekcji danych na zmienne wykorzystywane w asemblerze
+ .section .data
+ .balign 4
+ LEDSTATE_AT_0_AND_PRESCALER_AT_4:
+ .word 0,PRESCALER_MAX
+ dx_asm:
+ .word 1
+ dy_asm:
+ .word 1
+
+
+@Tworzenie sekcji programu z implementacją procedur i funkcji
+.section .text
+
+@Argumenty wejściowe procedury
+@r0 - adres źródła
+@r1 - adres przeznaczenia
+@r2 - liczba słów do przekopiowania (wielokrotność 8)
+
+kopiuj_blok_pamieci:
+@Dzielebue R2 przez 8
+      LSR   r2,r2,#3
+@Odłożenie na stosie rejestrów, których procedura nie może modyfikować
+      PUSH {r4-r10}
+kopiuj_osiem_slow:
+@Odczyt ośmiu słów źródłowych do rejestrów od r3 do r10
+      LDM    r0!, {r3-r10}
+@Zapis ośmiu rejestrów r3-r10 do miejsca przeznaczenia
+      STM    r1!, {r3-r10}
+      SUBS   r2, r2, #1
+@Iteracja po wszystkich elementach kopiowanego bloku pamięci
+      BNE    kopiuj_osiem_slow
+@Odtworzenie stanu rejestrów, których procedura nie mogła modyfikować
+      POP {r4-r10}
+@Powrót z procedury
+      MOV PC,LR
+
+
+
+@Procedura konwersji składowych RBG do formatu RGB565
+@R0 - składowa Blue
+@R1 - składowa Green
+@R2 - składowa Red
+
+@R0 - Wyjście koloru w formacie RGB565
+
+RGB16Pack:
+@Składowa Blue
+	AND r0,r0,#0x1f
+@Składowa Green
+	BFI r0,r1,#5,#6
+@Składowa Red
+	BFI r0,r2,#11,#5
+	MOV PC,LR
+
+
+@Procedura aktualizacji zmiennych globalnych określających współrzędne x,y ruchomego kwadratu na LCD
+move_square_asm:
+
+@Umieszcza w r0 i r2 stałe będące adresami zmiennych x oraz dx_asm
+ //ldr r0,=czerwony+x_field_offset
+ ldr r2,=dx_asm
+@Odczytuje zmienne x oraz dx_asm i umieszcza je w r1 oraz r3
+ ldr r3,[r2]
+ ldr r1,[r0]
+@r1=x+dx
+ add r1,r1,r3
+@Zapis zmiennej x
+ str r1,[r0]
+@Sprawdzenie u skok jeśli x<=1
+ cmp r1, #1
+ ble neg_x
+@Sprawdzenie i zmiana znaku dx jeśli x>=(240-34) (skok dla x<240-34)
+ cmp r1, #240-34
+ blt no_neg_x
+ neg_x:
+@r3=0-r3=-dx
+ rsb r3, r3, #0
+@Zapis zmiennej dx
+ str r3,[r2]
+ no_neg_x:
+ @Blok przetwarzania składowej y i dy. Analogiczny do bloku przetwarzania składowej x i dx.
+
+@Umieszcza w r0 stałą będącą adresem zmiennej y
+ //ldr r0,=czerwony+y_field_offset
+ @Odczytuje zmienne y oraz dy_asm i umieszcza je w r1 oraz r3
+ ldr r3,[r2,#4]
+ ldr r1,[r0]
+@r1=y+dy
+ add r1,r1,r3
+ str r1,[r0]
+@Sprawdzenie i skok jeśli y<=1
+ cmp r1, #1
+ ble neg_y
+@Sprawdzenie i zmiana znaku dy jeśli y>=(240-34) (skok dla y<240-34)
+ cmp r1, #320-34
+ blt no_neg_y
+ neg_y:
+@r3=0-r3=-dy
+ rsb r3, r3, #0
+@Zapis zmiennej dy
+ str r3,[r2,#4]
+ no_neg_y:
+ mov pc,lr
+
+
+@r0 - adres kasowanego obszaru
+@r1 - liczba słów do skasowania (wielokrotnośc 8)
+
+kasuj_blok_pamieci:
+	  LSR   r1,r1,#3
+	  PUSH {r4-r9}
+	  LDR r2,=fill+4
+	  LDM   r2, {r3-r9}
+	  LDR r2,[r2]
+wypelnij_osiem_slow:
+      STM    r0!, {r2-r9}
+      SUBS   r1, r1, #1
+      BNE    wypelnij_osiem_slow
+      POP {r4-r9}
+      MOV PC,LR
+fill:
+	.word 0,0,0,0,0,0,0,0
+
+
+@R0 -adres poczatku
+@R1 - rozmiar obszaru
+@R2 - wartosc 16-bitowa do wypelnienia
+fillMemory:
+ strh r2,[r0],#2
+ subs r1,r1,#1
+ bne fillMemory
+ mov pc,lr
+
+
+
+handleGPIO_asm:
+    LDR   r1, =0x40020010    // GPIOA->IDR (przycisk B1)
+    LDR   r0, [r1]
+    ANDS  r0, r0, #1         // Sprawdź bit 0
+    BEQ   gpio_off
+
+    // Przycisk wciśnięty – zaświeć LED (GPIOG, pin 14)
+    LDR   r1, =0x40021818    // GPIOG->BSRR
+    MOV   r2, #(1 << 14)     // Set bit 14
+    STR   r2, [r1]
+    MOVS  r0, #1             // Zwróć 1
+    BX    lr
+
+gpio_off:
+    // Przycisk puszczony – zgaś LED (GPIOG, pin 14)
+    LDR   r1, =0x40021818
+    MOV   r2, #(1 << (14+16)) // Reset bit 14
+    STR   r2, [r1]
+    MOVS  r0, #0             // Zwróć 0
+    BX    lr
+
+
+
+/*// r0 = buf, r1 = x, r2 = y, r3 = color
+LCD_DrawPixel_asm:
+    PUSH {r4}
+    LDR  r12, =320
+	MUL  r4, r2, r12	  // y*320
+    ADD  r4, r4, r1       // y*320+x
+    LSL  r4, r4, #1       // *2 (16-bit)
+    ADD  r0, r0, r4
+    STRH r3, [r0]
+    POP  {r4}
+    BX   lr
+
+*/
+// Prototyp C:
+// void LCD_DrawLine_asm(uint16_t* buf, int x, int y, int len, uint16_t color, int vertical);
+
+// W ARM EABI: r0=buf, r1=x, r2=y, r3=len, a od piątego argumentu na stosie:
+// [sp, #0] = return address (lr, automatycznie przez bl)
+// [sp, #4] = color
+// [sp, #8] = vertical
+
+LCD_DrawLine_asm:
+    PUSH {r4, r5, r6, r7, r8, r12, lr}
+    LDR  r4, [sp, #24]    // color (piąty argument)
+    LDR  r5, [sp, #28]    // vertical (szósty argument)
+    LDR  r12, =320
+    MOV  r7, r3           // licznik długości
+loop_line:
+    CMP  r7, #0
+    BEQ  done_line
+
+    MUL  r8, r2, r12      // r8 = y * 320
+    ADD  r8, r8, r1       // r8 = y*320 + x
+    LSL  r8, r8, #1       // r8 *= 2 (uint16_t)
+    ADD  r8, r0, r8       // r8 = buf + offset
+    STRH r4, [r8]         // ustaw piksel
+
+    CMP  r5, #1           // vertical?
+	BNE  horiz
+	ADD  r2, r2, #1       // y++ (czyli pionowa)
+	B    after_incr
+horiz:
+	ADD  r1, r1, #1       // x++ (czyli pozioma)
+after_incr:
+    SUB  r7, r7, #1
+    B    loop_line
+done_line:
+    POP  {r4, r5, r6, r7, r8, r12, pc}
+
+
+// MENU_HIGHLIGHT(int y)
+// r0 = y (górna krawędź paska)
+// LCD_BUF - adres bufora
+// x: 100..219 (120 pikseli), y: r0..r0+11 (12 wierszy)
+
+MEMORY_RANGE_RGB_SET:
+push {r4, lr}
+mov r3, r0
+mov r1, r1
+mov r2, r2
+mov r2,#0
+loop_set:
+beq end_set
+strh r3, [r1], #2
+add r2, r2, #1
+cmp r2, #200
+bne loop_set
+end_set:
+pop {r4, pc}
+/*
+MENU_HIGHLIGHT:
+
+mov r0, #0xffff
+ldr r1, =0xd0100000
+mov r2, #0
+loop:
+	strh r0, [r1]
+	add r1, r1, #2
+	add r2, r2, #1
+	cmp r2, #100
+	bne loop
+done:
+	mov pc,lr
+
+*/
+/*
+MENU_HIGHLIGHT:
+    PUSH {r1-r7, lr}
+    LDR  r6, =0xD0100000     // r6 = adres bufora LCD
+    MOV  r5, #0xffff      // r5 = kolor
+
+    MOV  r2, r0           // r2 = y (początkowy wiersz)
+    ADD  r3, r0, #30      // r3 = y+12 (końcowy wiersz)
+
+y_loop:
+    CMP  r2, r3
+    BGE  end
+
+    MOV  r1, #100         // r1 = x start
+x_loop:
+    CMP  r1, #220
+    BGE  next_row
+
+    // buf_offset = y * 320 + x
+    LDR  r12, =320
+    MUL  r4, r2, r12
+    ADD  r4, r4, r1
+    LSL  r4, r4, #2       // *2 bajty na pixel
+    ADD  r7, r6, r4
+    STRH r5, [r7]
+
+    ADD  r1, r1, #1
+    B    x_loop
+
+next_row:
+    ADD  r2, r2, #1
+    B    y_loop
+
+end:
+    POP {r1-r7, pc}
+*/
+
+
+// MEMORY_RANGE_RGB_SET(int RGB, unsigned short int* MEM, int SIZE)
+// r0 = RGB (16-bit kolor, 0xRRGG), r1 = MEM (adres bufora), r2 = SIZE (ile elementów)
+/*
+MEMORY_RANGE_RGB_SET:
+    PUSH {r4, r5, lr}
+    MOV  r4, r0      // r4 = kolor
+    MOV  r5, r2      // r5 = licznik
+    CMP  r5, #0
+    BEQ  mem_end
+mem_loop:
+    STRH r4, [r1], #2   // wpisz kolor, MEM++
+    SUBS r5, r5, #1
+    BNE  mem_loop
+mem_end:
+    POP {r4, r5, pc}
+
+
+// LCD_BUF_RANGE_SET(int RGB, int y, int SIZE)
+// r0 = RGB (kolor), r1 = y (startowy wiersz), r2 = SIZE (ile wierszy, wysokość prostokąta)
+
+LCD_BUF_RANGE_SET:
+    PUSH {r4, r5, r6, r7, lr}
+    LDR  r4, =LCD_BUF      // adres bufora LCD
+    MOV  r5, r0            // r5 = kolor
+    MOV  r6, r1            // r6 = y (start)
+    ADD  r7, r1, r2        // r7 = y + SIZE (koniec)
+
+buf_y_loop:
+    CMP  r6, r7
+    BGE  buf_end
+
+    // x: 100..219 (120 pikseli)
+    MOV  r2, #100
+buf_x_loop:
+    CMP  r2, #220
+    BGE  buf_next_row
+
+	LDR  r12, =320
+    MUL  r3, r6, r12      // r3 = y * 320
+    ADD  r3, r3, r2        // r3 = y*320 + x
+    LSL  r3, r3, #1        // *2 bajty na pixel
+    ADD  r1, r4, r3
+    STRH r5, [r1]
+
+    ADD  r2, r2, #1
+    B    buf_x_loop
+
+buf_next_row:
+    ADD  r6, r6, #1
+    B    buf_y_loop
+
+buf_end:
+    POP {r4, r5, r6, r7, pc}
+*/
+//LUB TO
+
+
+// MENU_HIGHLIGHT(int POSITION)
+// r0 = POSITION (górna krawędź podświetlenia)
+/*
+MENU_HIGHLIGHT:
+    PUSH {r4, r5, lr}
+    // Wywołaj LCD_BUF_RANGE_SET(0xc0cb, POSITION, 12)
+    MOV  r1, r0        // y
+    MOV  r0, #0xc0cb   // kolor
+    MOV  r2, #12       // wysokość podświetlenia
+    BL   LCD_BUF_RANGE_SET
+    POP  {r4, r5, pc}
+*/

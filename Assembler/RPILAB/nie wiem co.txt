@@ -1,0 +1,209 @@
+main.c 
+
+#include "main.h"
+
+//Zmienne kontrolujące stan pracy oprogramowania
+int time_stamp, fade_step, fade_start_place;
+
+//Tablica struktur informacji o kwadratach rysowanych na LCD
+square_t kwadraty[max_obj];
+
+unsigned char *fb_addr; 	// Wskaźnik na famebuffer
+unsigned int fb_pitch;		// Szerokośc wiersza framebuffera wyrazona w bajtach
+// Bufory pomocnicze przechowujące obrazy tła
+unsigned long backgroundB[max_height * max_width];
+unsigned long backgroundR[max_height * max_width];
+unsigned long background1[virtual_height*virtual_word_pitch];
+unsigned long background2[virtual_height*virtual_word_pitch];
+//unsigned long tlo1[max_width * max_height];
+//unsigned long tlo2[max_width * max_height];
+//unsigned int offsetY;
+//unsigned int licznik;
+
+int stop;
+int screen_yoffset_counter;
+int screen_yoffset;
+
+enum FB_BufferVisibility_t {FB_ScreenA,FB_ScreenB,FB_ScrollingToA,FB_ScrollingToB};
+enum FB_BufferVisibility_t FB_BufferVisibility;
+
+extern unsigned int _mb_virt_offset_msg;
+extern unsigned int _v_X;
+extern unsigned int _v_Y;
+extern unsigned int _v_request;
+extern unsigned int _v_answer;
+
+//Punkt wejścia do języka C (procedura wywoływnana z asemblera)
+void notmain(void) {
+	FB_BufferVisibility=FB_ScreenA;
+	STR(STC1,LDR(STCLO) + IntTimerPeriod);
+	STR(IRQEN1,2);
+	screen_yoffset_counter=0;
+	screen_yoffset=0;
+	InitHardware();		// Inicjalizacja sprzętu
+	InitData();			// inicjalizacja danych
+	irq_enable();
+
+	unsigned int fb_width_px=fb_pitch/4;
+	for (unsigned long idx=0;idx<fb_width_px*virtual_height/2;idx++){
+		background1[idx]=255UL*idx/(fb_width_px*screen_height);
+		background1[idx+fb_width_px*virtual_height/2]=(255UL*idx/(fb_width_px*screen_height))<<16;
+	}
+       while (1) {
+    	//ClearScreen();	// Iteracyjne czyszczenie framebuffer-a
+    	//DrawObjects();  // Generowanie obiektów graficznych
+    	GPIOHandle();	// Obsługa portów I/O
+		switch (FB_BufferVisibility)
+		{
+		case FB_ScreenA:
+			//zmien_tlo(background1, fb_pitch, virtual_width, virtual_height, YELLOW);
+			for(unsigned int idx=100;idx<200;idx++){
+				for(unsigned int idy=100;idy<200;idy++){
+				draw_pixel(fb_addr, fb_pitch, idx, idy, 0x00FF00); // zielony punkt w (100,120)
+			}}
+			if(time_stamp==500)FB_BufferVisibility=FB_ScreenB;
+			break;
+		case FB_ScreenB:
+			//zmien_tlo(background1, fb_pitch, virtual_width, virtual_height, GREEN);
+			for(unsigned int idx=300;idx<400;idx++){
+							for(unsigned int idy=200;idy<300;idy++){
+							draw_pixel(fb_addr, fb_pitch, idx, idy, 0xFF0000); // zielony punkt w (100,120)
+						}}
+			if(time_stamp==500)FB_BufferVisibility=FB_ScreenA;
+			break;
+		case FB_ScrollingToA:
+
+			//scroll_screen(screen_yoffset);
+			//fade_screen((unsigned long*)fb_addr,background1,fb_pitch,virtual_height);
+			break;
+		case FB_ScrollingToB:
+			scroll_screen(screen_yoffset);
+			fade_screen((unsigned long*)fb_addr,background1,fb_pitch,virtual_height);
+			break;
+	}
+
+	time_stamp++;
+}}
+
+void scroll_screen(int y_offset)
+{
+	*((unsigned int*)(&_v_X))*=4;  //*4 dla QEMY - bug?
+	*((unsigned int*)(&_v_Y))=y_offset;
+	*((unsigned int*)(&_v_request))=0;
+	*((unsigned int*)(&_v_answer))=0;
+	ExchangeMB((unsigned int) &_mb_virt_offset_msg | 8);
+}
+//zmienia cale tlo na jeden kolor
+void zmien_tlo(unsigned char *FB, unsigned int pitch,unsigned int width, unsigned int height, unsigned int kolor){
+	for(int y=0; y<height;y++){
+		for(int x=0; x<width; x++){ //wypelnia cala linie w danym kolorze i przechodzi do kolejnej linii
+			unsigned int* pixel=(unsigned int*)(FB+x*4+y*pitch); //zmienna wskaźnikowa ktora przechowuje adres pierwszej komorki kazdego pixela
+			*pixel=kolor;
+		}
+	}
+}
+
+
+
+//--------------------------------------------------------------------------------
+//                                     PROCEDURY
+//--------------------------------------------------------------------------------
+
+//Inicjalizacja danych globalnych
+void InitData() {
+	fade_step = 18, fade_start_place = 0; // Ustaw czyszczenie ekranu na 18 iteracji
+	time_stamp=0;						  // Zerowanie znacznika czasowego
+}
+
+//Inicjalizacja układów peryferyjnych
+void InitHardware() {
+	STR(GPFSEL3, 1 << 15); // gpio35 ustawiony na wyjście
+	ExchangeMB((int) &_mb_msg | 8); // Wymiana wiadomości na kanale 8 - ustawienie framebuffer-a
+	fb_addr = (unsigned char*) (*(&_fb_addr) & 0x3fffffff); //adres framebuffer-a
+	fb_pitch = (unsigned int) (*(&_fb_pitch)); //skok wiersza framebuffer-a
+}
+
+// Iteracyjne czyszczenie framebuffer-a na podstawie stanu portu GPIO35
+
+
+//Wysterowuje porty GPIO35 na podstawie upływu czasu
+void GPIOHandle() {
+	if (time_stamp&0x1200)
+		STR(GPSET1, 1 << (35 - 32)); // Ustaw na jedynkę GPIO35
+	else
+		STR(GPCLR1, 1 << (35 - 32)); // Wyzeruj GPIO35
+
+}
+
+// Rysuje sumą logiczną prostokąt o podanych parametrach
+
+
+void fade_screen(unsigned long *FB, unsigned long *back, unsigned int pitch, int height) {
+
+// Wyznaczenie iteracji wygaszania zawartości framebuffer-au
+	fade_start_place++;
+	if (fade_start_place > fade_step) {
+		fade_start_place = 0;
+		fade_step ^= 0x1;
+	}
+	FB = &FB[fade_start_place];
+	back = &back[fade_start_place];
+
+
+//Wygaszanie i nakładanie tła we framebuferze dla wyznaczobej iteracji
+	int pixInRow = pitch / 4;
+	for (unsigned int idx = 0; idx < pixInRow * height; idx += fade_step) {
+		*FB = ((*FB & 0xfe00) >> 1) | *back;
+		FB += fade_step;
+		back += fade_step;
+	}
+
+}
+
+//Rysuje obiekty we framebuferze
+
+//Procedura obsługi przerwania IRQ
+void handler_irq() {
+	STR(STC1,LDR(STCLO)+IntTimerPeriod);
+	STR(STCS,2);
+
+	if(FB_BufferVisibility==FB_ScrollingToB)
+	{
+		screen_yoffset_counter++;
+		if(screen_yoffset_counter>=1000){
+			screen_yoffset_counter=1000;
+			FB_BufferVisibility=FB_ScreenB;
+		}
+	}
+	else if(FB_BufferVisibility==FB_ScrollingToA){
+		screen_yoffset_counter--;
+			if(screen_yoffset_counter<=0){
+				screen_yoffset_counter=0;
+				FB_BufferVisibility=FB_ScreenA;
+			}
+	}
+	screen_yoffset=screen_height*screen_yoffset_counter/1000;
+}
+----------------
+main.h
+
+#include "RPILAB.h"
+#include "bcm2836.h"
+#include <stdlib.h>
+
+typedef struct
+{
+short int x,y,dx,dy,s;
+} square_t;
+
+
+//void draw_rect(unsigned char* FB, unsigned int pitch, int x, int y, int width, int height ,unsigned int val);
+void fade_screen(unsigned long* FB, unsigned long* back, unsigned int pitch, int height);
+void InitData();
+void InitHardware();
+void GPIOHandle();
+void scroll_screen(int y_offset);
+void draw_pixel(unsigned char* FB, unsigned int pitch, int x, int y, unsigned int color);
+void zmien_tlo(unsigned char *FB, unsigned int pitch,unsigned int width, unsigned int height, unsigned int kolor);
+
+rpilab

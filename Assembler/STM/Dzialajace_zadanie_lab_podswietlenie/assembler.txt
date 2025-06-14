@@ -1,0 +1,268 @@
+@ ===================== USTAWIENIA I DEFINICJE =====================
+@ Korzystaj ze składni UAL
+   .syntax unified
+
+@ Definicje stałych
+   .set PRESCALER_MAX, 50
+   .set PERIPH_BASE, 0x40000000
+   .set AHB1PERIPH_OFFSET, 0x00020000
+   .set GPIOG_BASE, PERIPH_BASE+AHB1PERIPH_OFFSET+0x1800
+   .set BSRR_OFFSET, 0x18
+   .set x_field_offset, 0
+   .set y_field_offset, 4
+
+@ ===================== SYMBOLE GLOBALNE =====================
+@ Definicja symboli globalnych (sprowadzanych do asemblera i udostępnianych dla języka C)
+   .global move_square_asm
+   .global RGB16Pack
+   .global kopiuj_blok_pamieci
+   .global kasuj_blok_pamieci
+   .global kwadrat
+   .global fillMemory
+   .global handleGPIO_asm
+   .global LCD_DrawPixel_asm
+   .global LCD_DrawLine_asm
+   .global MENU_HIGHLIGHT
+   .global MEMORY_RANGE_RGB_SET
+   .global LCD_BUF_RANGE_SET
+
+@ ===================== SEKCJA KODU =====================
+.section .text
+
+MEMORY_RANGE_RGB_SET:
+    push {r4, lr}
+    mov r3, r0
+    mov r1, r1
+    mov r2, r2
+loop_set:
+    cmp r2, #0
+    beq end_set
+    strh r3, [r1], #2
+    subs r2, r2, #1
+    b loop_set
+end_set:
+    pop {r4, pc}
+
+@ ===================== SEKCJA DANYCH =====================
+.section .data
+.balign 4
+LEDSTATE_AT_0_AND_PRESCALER_AT_4:
+    .word 0, PRESCALER_MAX
+dx_asm:
+    .word 1
+dy_asm:
+    .word 1
+
+@ ===================== KOPIOWANIE BLOKU PAMIĘCI =====================
+.section .text
+kopiuj_blok_pamieci:
+    LSR   r2, r2, #3
+    PUSH {r4-r10}
+kopiuj_osiem_slow:
+    LDM    r0!, {r3-r10}
+    STM    r1!, {r3-r10}
+    SUBS   r2, r2, #1
+    BNE    kopiuj_osiem_slow
+    POP {r4-r10}
+    MOV PC, LR
+
+@ ===================== KONWERSJA RGB =====================
+RGB16Pack:
+    AND r0, r0, #0x1f
+    BFI r0, r1, #5, #6
+    BFI r0, r2, #11, #5
+    MOV PC, LR
+
+@ ===================== RUCH KWADRATU =====================
+move_square_asm:
+    ldr r2, =dx_asm
+    ldr r3, [r2]
+    ldr r1, [r0]
+    add r1, r1, r3
+    str r1, [r0]
+    cmp r1, #1
+    ble neg_x
+    cmp r1, #240-34
+    blt no_neg_x
+neg_x:
+    rsb r3, r3, #0
+    str r3, [r2]
+no_neg_x:
+    ldr r3, [r2, #4]
+    ldr r1, [r0]
+    add r1, r1, r3
+    str r1, [r0]
+    cmp r1, #1
+    ble neg_y
+    cmp r1, #320-34
+    blt no_neg_y
+neg_y:
+    rsb r3, r3, #0
+    str r3, [r2, #4]
+no_neg_y:
+    mov pc, lr
+
+@ ===================== KASOWANIE BLOKU PAMIĘCI =====================
+kasuj_blok_pamieci:
+    LSR   r1, r1, #3
+    PUSH {r4-r9}
+    LDR r2, =fill+4
+    LDM   r2, {r3-r9}
+    LDR r2, [r2]
+wypelnij_osiem_slow:
+    STM    r0!, {r2-r9}
+    SUBS   r1, r1, #1
+    BNE    wypelnij_osiem_slow
+    POP {r4-r9}
+    MOV PC, LR
+fill:
+    .word 0,0,0,0,0,0,0,0
+
+@ ===================== WYPEŁNIANIE PAMIĘCI =====================
+fillMemory:
+    strh r2, [r0], #2
+    subs r1, r1, #1
+    bne fillMemory
+    mov pc, lr
+
+@ ===================== OBSŁUGA GPIO =====================
+handleGPIO_asm:
+    LDR   r1, =0x40020010    // GPIOA->IDR (przycisk B1)
+    LDR   r0, [r1]
+    ANDS  r0, r0, #1         // Sprawdź bit 0
+    BEQ   gpio_off
+    LDR   r1, =0x40021818    // GPIOG->BSRR
+    MOV   r2, #(1 << 14)     // Set bit 14
+    STR   r2, [r1]
+    MOVS  r0, #1             // Zwróć 1
+    BX    lr
+gpio_off:
+    LDR   r1, =0x40021818
+    MOV   r2, #(1 << (14+16)) // Reset bit 14
+    STR   r2, [r1]
+    MOVS  r0, #0             // Zwróć 0
+    BX    lr
+
+@ ===================== RYSOWANIE PIKSELA =====================
+/*
+LCD_DrawPixel_asm:
+    PUSH {r4}
+    LDR  r12, =320
+    MUL  r4, r2, r12      // y*320
+    ADD  r4, r4, r1       // y*320+x
+    LSL  r4, r4, #1       // *2 (16-bit)
+    ADD  r0, r0, r4
+    STRH r3, [r0]
+    POP  {r4}
+    BX   lr
+*/
+
+@ ===================== RYSOWANIE LINII =====================
+LCD_DrawLine_asm:
+    PUSH {r4, r5, r6, r7, r8, r12, lr}
+    LDR  r4, [sp, #24]    // color (piąty argument)
+    LDR  r5, [sp, #28]    // vertical (szósty argument)
+    LDR  r12, =320
+    MOV  r7, r3           // licznik długości
+loop_line:
+    CMP  r7, #0
+    BEQ  done_line
+    MUL  r8, r2, r12      // r8 = y * 320
+    ADD  r8, r8, r1       // r8 = y*320 + x
+    LSL  r8, r8, #1       // r8 *= 2 (uint16_t)
+    ADD  r8, r0, r8       // r8 = buf + offset
+    STRH r4, [r8]         // ustaw piksel
+    CMP  r5, #1           // vertical?
+    BNE  horiz
+    ADD  r2, r2, #1       // y++ (czyli pionowa)
+    B    after_incr
+horiz:
+    ADD  r1, r1, #1       // x++ (czyli pozioma)
+after_incr:
+    SUB  r7, r7, #1
+    B    loop_line
+done_line:
+    POP  {r4, r5, r6, r7, r8, r12, pc}
+
+@ ===================== MENU HIGHLIGHT =====================
+MENU_HIGHLIGHT:
+    PUSH {r1-r7, lr}
+    LDR  r6, =LCD_BUF     // r6 = adres bufora LCD
+    MOV  r5, #0xc0cb      // r5 = kolor
+    MOV  r2, r0           // r2 = y (początkowy wiersz)
+    ADD  r3, r0, #12      // r3 = y+12 (końcowy wiersz)
+y_loop:
+    CMP  r2, r3
+    BGE  end
+    MOV  r1, #100         // r1 = x start
+x_loop:
+    CMP  r1, #220
+    BGE  next_row
+    LDR  r12, =320
+    MUL  r4, r2, r12
+    ADD  r4, r4, r1
+    LSL  r4, r4, #1       // *2 bajty na pixel
+    ADD  r7, r6, r4
+    STRH r5, [r7]
+    ADD  r1, r1, #1
+    B    x_loop
+next_row:
+    ADD  r2, r2, #1
+    B    y_loop
+end:
+    POP {r1-r7, pc}
+
+@ ===================== MEMORY_RANGE_RGB_SET (wersja alternatywna) =====================
+/*
+MEMORY_RANGE_RGB_SET:
+    PUSH {r4, r5, lr}
+    MOV  r4, r0      // r4 = kolor
+    MOV  r5, r2      // r5 = licznik
+    CMP  r5, #0
+    BEQ  mem_end
+mem_loop:
+    STRH r4, [r1], #2   // wpisz kolor, MEM++
+    SUBS r5, r5, #1
+    BNE  mem_loop
+mem_end:
+    POP {r4, r5, pc}
+*/
+
+@ ===================== LCD_BUF_RANGE_SET =====================
+LCD_BUF_RANGE_SET:
+    PUSH {r4, r5, r6, r7, lr}
+    LDR  r4, =LCD_BUF      // adres bufora LCD
+    MOV  r5, r0            // r5 = kolor
+    MOV  r6, r1            // r6 = y (start)
+    ADD  r7, r1, r2        // r7 = y + SIZE (koniec)
+buf_y_loop:
+    CMP  r6, r7
+    BGE  buf_end
+    MOV  r2, #100
+buf_x_loop:
+    CMP  r2, #220
+    BGE  buf_next_row
+    MOV  r5, #320
+    MUL  r3, r6, r5     // r3 = y * 320
+    ADD  r3, r3, r2        // r3 = y*320 + x
+    LSL  r3, r3, #1        // *2 bajty na pixel
+    ADD  r1, r4, r3
+    STRH r5, [r1]
+    ADD  r2, r2, #1
+    B    buf_x_loop
+buf_next_row:
+    ADD  r6, r6, #1
+    B    buf_y_loop
+buf_end:
+    POP {r4, r5, r6, r7, pc}
+
+@ ===================== MENU_HIGHLIGHT (wersja alternatywna) =====================
+/*
+MENU_HIGHLIGHT:
+    PUSH {r4, r5, lr}
+    MOV  r1, r0        // y
+    MOV  r0, #0xc0cb   // kolor
+    MOV  r2, #12       // wysokość podświetlenia
+    BL   LCD_BUF_RANGE_SET
+    POP  {r4, r5, pc}
+*/

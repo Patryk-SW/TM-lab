@@ -1,0 +1,90 @@
+main.c 
+
+
+#include "main.h"
+
+unsigned short int *const LCD_FB = (unsigned short int*) 0xD0000000;   // Framebuffer
+unsigned short int *const LCD_BUF = (unsigned short int*) 0xD0100000;  // Bufor graficzny
+unsigned char Stan;
+
+// Struktura kwadrat – nie jest używana w tym zadaniu
+kwadrat_t __attribute__((aligned(4))) kwadrat = {.x = 120, .y = 160, .dx = 1, .dy = 1, .size = 30};
+
+int main(void) {
+	System_Init();      // Inicjalizacja systemu
+	//niebieskietlo();    // Zainicjuj bufor zawartością do wyświetlenia
+	//Clear_And_Reload_Screen();
+	while (1) {
+		/*handleGPIO();    // Obsługa przycisku
+		if (Stan == 1) {
+			przejscie(); // Efekt przejścia zawartości bufora
+			Clear_And_Reload_Screen();
+		} else {
+			czerwonetlo();               // Inny stan: czerwony ekran
+			Clear_And_Reload_Screen();
+		}*/
+		handleGPIO();
+		//LCD_DrawPixel_asm(LCD_BUF,100,100,(MAX_R << 11));
+		LCD_DrawLine_asm(LCD_BUF, 100, 50, 100, MAX_R<<1,0);
+		LCD_DrawLine_asm(LCD_BUF, 70, 60, 80,MAX_B<<1,1);
+		Clear_And_Reload_Screen();
+	}
+}
+void handleGPIO(void) {
+    Stan = handleGPIO_asm();
+}
+void czerwonetlo(void) {
+	for (int i = 0; i < 320 * 240; i++) {
+		LCD_BUF[i] = MAX_R << 11; // Czerwony
+	}
+}
+
+void niebieskietlo(void) {
+	for (int i = 0; i < 320 * 240; i++) { // Niebieski
+		LCD_BUF[i] = MAX_B<<1;
+	}
+}
+
+// Procedura z efektem przejścia z bufora na ekran
+void przejscie(void) {
+	for (int col = 0; col < 320; col++) {
+		for (int row = 0; row < 240; row++) {
+			//LCD_FB[row * 320 + col] = LCD_BUF[row * 320 + col];  // Kolumna po kolumnie
+			LCD_FB[row*320+col] = MAX_B<<1;
+		}
+		for (volatile int d = 0; d < 1000000; d++);  // Krótka pauza dla efektu
+	}
+}
+
+// Kopiowanie bufora do framebuffer-a (pełne od razu)
+void Clear_And_Reload_Screen(void) {
+	for (int i = 0; i < 320 * 240; i++) {
+		LCD_FB[i] = LCD_BUF[i];
+		LCD_BUF[i] = 0;
+	}
+}
+
+// Obsługa GPIO i przycisku
+/*void handleGPIO(void) {
+	if (!(GPIOA->IDR & 1))   // Przycisk nie wciśnięty
+		Stan = 0;
+	else
+		Stan = 1;            // Wciśnięty
+}*/
+
+// Inicjalizacja systemu
+void System_Init(void) {
+	HAL_Init();
+	SystemClock_Config();
+	BSP_SDRAM_Init();
+	BSP_LCD_Init();
+
+	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOGEN;       // Dioda LED
+	GPIOG->MODER |= GPIO_Mode_OUT << (14 * 2);
+	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;       // Przycisk
+}
+
+// Obsługa przerwania SysTick (dla HAL)
+void SysTick_Handler(void) {
+	HAL_IncTick();
+}

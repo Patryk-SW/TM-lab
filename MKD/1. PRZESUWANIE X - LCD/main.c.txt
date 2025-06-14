@@ -1,0 +1,57 @@
+#include "main.h"
+
+//Definicja symbolu umozliwiajacego wykorzystanie zaimplementowanych w asemblerze przykladowych procedur
+//#define ASM_EXAMPLE
+
+unsigned char xdata PTWY _at_ 0x8008; // Deklaracja i definicja rejestru portu sterujacego diodami L0-L7
+unsigned char xdata LCDBUF[32];				// Deklaracja i definicja bufora pomocniczego łańcucha tekstowego wyświetlacza LCD 2x16 znakow
+unsigned char Licznik; 						// Deklaracja i definicja 8-mio bitowego licznika binarnego
+sbit P1_6 = P1^6;  							// Deklaracja i definicja mapowania 6-tego bitu portu P1
+int i=16;
+
+void main(void) {
+		Licznik=0;					// Inicjalizacja licznika binarnego  
+		strncpy(LCDBUF,			"     Pro",16); // Inicjalizacja tekstu w pierwszym wierszu bufora pomocniczego W_LCD
+	 
+	//strncpy(&LCDBUF[i],"      MODE      ",16); // Inicjalizacja tekstu w drugim wierszu bufora pomocniczego W_LCD
+		prglcd();						// Inicjalizacja wyswietlacza W_LCD
+	while(1){							// Nieskończona pętla główna
+		//WAIT_10US(25000U);	// Opóźnienie 250ms realizowane w każdej iteracji pętli glównej
+		przesuniecieX(i);
+		INWERSJAP1_6();			// Wywołanie procedury inwersji diody L8 (port P1.6)
+		PTWY=Licznik++;			// Inkrementacja i wizualizacja licznika binarnego na diodach LED L0-L7
+		//disptext(LCDBUF);		// Wysłanie tekstowego bufora pomocniczego LCDBUF do sterownika wyświetlacza W_LCD
+		i++;
+		if(i==32) i=16;
+	}
+}
+void przesuniecieX(int i) {
+//for (i=16;i<32;i++){
+	strncpy(&LCDBUF[i],"X",1);
+	disptext(LCDBUF);
+	WAIT_10US(25000U);
+	strncpy(&LCDBUF[i]," ",1);
+	disptext(LCDBUF);
+//}
+	
+}
+//Procedura inwersji stanu diody L8 podłączonej do portu P1.6
+void INWERSJAP1_6(void){
+#ifdef ASM_EXAMPLE			// Weryfikacja definicji symbolu ASM_EXAMPLE dla zróżnicowania postaci kodu źródłowego
+	INWERSJAP1_6_ASM();		// Wywołanie procedury inwersji P1.6 zaimplementowanej w asemblerze
+#else
+	P1_6=!P1_6;				// Inwersja stanu diody L8 
+#endif
+}
+
+//Procedura opóźnienia czasowego o czasie równym 10*wait mikrosekund. 
+void WAIT_10US(unsigned int wait){
+#ifdef ASM_EXAMPLE
+	WAIT_10US_ASM(-wait);			// Wywołanie procedury implementującej w asemblerze opóźnienie równe 10*wait mikrosekund. 
+#else
+	wait=(wait*10UL)/11UL;
+	while(--wait) _nop_();			// Minimalnie 11 cykli (maksymalnie 12 cykli) maszynowych (mikrosekund) na iteracje pętli przy kompilacji C51v.9.60.7.0 z maksymalną optymalizacją
+#endif
+}
+
+ 

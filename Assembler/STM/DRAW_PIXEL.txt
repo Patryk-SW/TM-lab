@@ -1,0 +1,21 @@
+main.c
+
+LCD_DrawPixel_asm(LCD_BUF,100,100,(MAX_R << 11));
+------------------
+main.h
+
+void LCD_DrawPixel_asm(uint16_t* buf, int x, int y, uint16_t color);
+------------------
+assembly
+
+// r0 = buf, r1 = x, r2 = y, r3 = color
+LCD_DrawPixel_asm:
+    PUSH {r4}
+    LDR  r12, =320
+	MUL  r4, r2, r12	  // y*320
+    ADD  r4, r4, r1       // y*320+x
+    LSL  r4, r4, #1       // *2 (16-bit)
+    ADD  r0, r0, r4
+    STRH r3, [r0]
+    POP  {r4}
+    BX   lr

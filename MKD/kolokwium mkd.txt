@@ -1,0 +1,98 @@
+#include "main.h"
+
+unsigned char xdata PTWE _at_ 0x8008; //pod tym adresem jest przechowywany stan przyciskow, wynika to z budowy calego ukladu, a nie np. jakiejs konfiguracji w programie(tak samo ponizej)
+unsigned char xdata PTWY _at_ 0x8008;
+unsigned char xdata PTAC _at_ 0x8000; //pod tym adresem jest przechowywany pomiar z ADC
+unsigned char xdata PTSEG _at_ 0x8018; //ten adres jest bezposrednio polaczony z 7-segmentowym wyswietlaczem LED. To co do niego wpiszemy bedzie mialo odzwierciedlenie na tym wyswietlaczu
+unsigned char xdata POT0 _at_ 0x8005; //adresy pod ktore trzeba cos wpisac zeby zaczal sie pomiar na danych kanalach ADC
+unsigned char xdata POT1 _at_ 0x8006; //te zmienne nazywam POT bo do kanalow podlaczone sa potencjometry
+unsigned char xdata POT2 _at_ 0x8007;
+
+unsigned char xdata LCDBUF[32];			
+unsigned char Pomiar;
+unsigned int  Napiecie;
+unsigned char Przycisk;
+unsigned char stan_LED=0;
+unsigned char maska;
+int i=0;
+int j=0;
+//definicje funckji
+
+void SterujLED(unsigned char nrDiody, unsigned char stan) {
+		 
+    if (nrDiody > 7) return; // zabezpieczenie, mamy tylko diody 0–7
+				maska = 1 << (7-nrDiody); // tworzymy maske dla tej konkretnej diody
+				
+    if (stan){
+				stan_LED|=maska;	//ustawiamy bit
+        PTWE = stan_LED;  //zapalamy diode
+		}
+    else{
+				stan_LED&=~maska;	//zerujemy bit
+        PTWE = stan_LED;  //gasimy diode
+		}
+}
+
+unsigned char PomiarADC(unsigned char KanalAnalogowy){ //wybieramy z ktorego kanalu przetwornika ADC chcemy odczytac pomiar i odczytujemy go
+ 	//wybor kanalu dokonuje sie poprzez wcisniecie odpowiedniego przycisku
+	switch(KanalAnalogowy){		
+		case 0:
+			POT0=0; // wedlug instrukcji przypisanie jakiejkolwiek wartosci do zmiennych POT0,1,2 powoduje start pomiaru na odpowiadajacych im kanalom ADC
+			break;
+		case 1:
+			POT1=0;
+			break;
+		case 2:
+			POT2=0;
+			break;
+		default:
+			break;
+	}
+	WAIT_10US(10); //poczekaj 100 us aby zdarzyl dokonac sie pomiar.
+	return PTAC; //funkcja zwroci wartosc pomiaru ktora zapisywana jest w pamieci pod konkretnym adresem ktory zostal przypisany do PTAC na samym poczatku przy deklaracji wszystkich zmiennych globalnych. Zwraca wartosc od 0 do 255 w zaleznosci od wysokosci zmierzonego napiecia
+}	
+
+unsigned int ADCtoPrzedzial(unsigned char a_Pomiar){
+	unsigned int Przedzial=(a_Pomiar+1)/10.0;
+	return Przedzial;
+}
+
+
+//poczatek programu
+void main(void) {
+		prglcd();
+//petla glowna
+	while(1){
+		unsigned char ADC = PomiarADC(2);
+		unsigned int przedzial = ADCtoPrzedzial(ADC);
+		for (i=0; i<8; i++){
+			SterujLED(i, 0);
+		}
+		strncpy(LCDBUF,"Progres         ",16);
+		strncpy(&LCDBUF[16],"                ",16);
+		if (przedzial<8){
+			for (i=0; i<przedzial; i++){
+				SterujLED(i, 1);
+				strncpy(&LCDBUF[16],"                ",16);
+			}
+		}
+		else {
+				for (i=0; i<8; i++){
+					SterujLED(i, 1);
+			}
+			for (j=0; j<przedzial-i;j++){
+				LCDBUF[16+j] = '.';
+			}
+		}
+		disptext(LCDBUF);
+	}
+}
+
+
+//definicja funkcji opozniajacej
+void WAIT_10US(unsigned int wait){
+	wait=(wait*10UL)/11UL;
+	while(--wait) _nop_();	
+}
+
+ 

@@ -1,0 +1,273 @@
+#include "main.h"
+
+volatile int screen_transition_counter = 0;
+volatile int scroll_direction = 1;
+volatile int animation_in_progress = 0;
+
+int time_stamp, fade_step, fade_start_place;
+square_t kwadraty[max_obj];
+unsigned char *fb_addr;
+unsigned int fb_pitch;
+unsigned long backgroundB[max_height * max_width * 2];
+unsigned long backgroundR[max_height * max_width * 2];
+int scroll_px = 0;
+
+volatile int last_button_state = 1; // zakładamy, że przycisk nie wciśnięty na start (stan wysoki)
+
+volatile rgb_pwm_t RGB_LED;
+
+void InitData() {
+    fade_step = 18;
+    fade_start_place = 0;
+    time_stamp = 0;
+    int full_width = screen_width * 2;
+
+    for (int y = 0; y < screen_height; y++) {
+        for (int x = 0; x < full_width; x++) {
+            int idx = y * full_width + x;
+            if (x < full_width / 2) {
+                backgroundB[idx] = 0x00FF00;
+                backgroundR[idx] = 0x00FF00;
+            } else {
+                backgroundB[idx] = 0xFF0000;
+                backgroundR[idx] = 0xFF0000;
+            }
+        }
+    }
+
+    for (int idx = 0; idx < max_obj; idx++) {
+        int s = kwadraty[idx].s = (rand() & 0x7f) + 5;
+        kwadraty[idx].x = (screen_Qwidth - s) * (rand() & 0x01ff) / 0x1ff;
+        kwadraty[idx].y = (screen_Qheight - s) * (rand() & 0x01ff) / 0x1ff;
+        kwadraty[idx].dx = ((rand() & 0x1) ? 1 : -1) * ((rand() & 0x7) + 1);
+        kwadraty[idx].dy = ((rand() & 0x1) ? 1 : -1) * ((rand() & 0x7) + 1);
+    }
+}
+
+void InitHardware() {
+    // Inicjalizacja pinów LED i reszty - jak masz
+
+    STR(GPFSEL3, 1 << 15); // np. ustawienie pinu
+    STR(GPFSEL1, (1 << (RED % 10 * 3)) | (1 << (BLUE % 10 * 3)));
+
+    ExchangeMB((int) &_mb_msg | 8);
+    fb_addr = (unsigned char*) (*(&_fb_addr) & 0x3fffffff);
+    fb_pitch = (unsigned int) (*(&_fb_pitch));
+
+    RGB_LED = (rgb_pwm_t){0, 0, MaxRGBCompare, 0, 0, MaxRGBCompare, 0, 0, MaxRGBCompare};
+
+    STC1 = STCLO + IntTimerPeriod;
+    IRQEN1 = TimerC1EN;
+}
+
+void ClearScreen() {
+    if (animation_in_progress) {
+        scroll_px = (scroll_direction > 0) ?
+            (screen_transition_counter * MaxScrollPx / IntsPerSecond) :
+            (MaxScrollPx - screen_transition_counter * MaxScrollPx / IntsPerSecond);
+    } else {
+        scroll_px = (scroll_direction > 0) ? 0 : MaxScrollPx;
+    }
+
+    for (int y = 0; y < screen_height; y++) {
+        for (int x = 0; x < screen_width; x++) {
+            int src_x = scroll_px + x;
+            int src_idx = y * (screen_width * 2) + src_x;
+            int dst_offset = y * fb_pitch + x * 4;
+            unsigned int color = backgroundB[src_idx];
+            *((unsigned int*)(fb_addr + dst_offset)) = color;
+        }
+    }
+}
+
+void DrawObjects() {
+    int background_state = (scroll_px >= screen_width);
+
+    for (int idx = 0; idx < max_obj; idx++) {
+        int x = kwadraty[idx].x >> Q_MATH;
+        int y = kwadraty[idx].y >> Q_MATH;
+        int s = (kwadraty[idx].s >> Q_MATH) + 1;
+
+        int px = x - scroll_px;
+        if (px + s < 0 || px >= screen_width) continue;
+
+        unsigned int color = background_state ? 0x0000CF : 0xFF00BF;
+
+        for (int j = 0; j < s; j++) {
+            int py = y + j;
+            if (py < 0 || py >= screen_height) continue;
+            for (int i = 0; i < s; i++) {
+                int draw_x = px + i;
+                if (draw_x >= 0 && draw_x < screen_width) {
+                    int dst_offset = py * fb_pitch + draw_x * 4;
+                    *((unsigned int*)(fb_addr + dst_offset)) = color;
+                }
+            }
+        }
+    }
+}
+
+void UpdateObjects() {
+    for (int idx = 0; idx < max_obj; idx++) {
+        int x = kwadraty[idx].x;
+        int y = kwadraty[idx].y;
+        int s = kwadraty[idx].s;
+        int speed_modifier = (scroll_px >= screen_width) ? 2 : 1;
+
+        x += kwadraty[idx].dx * speed_modifier;
+        y += kwadraty[idx].dy * speed_modifier;
+
+        if (x < 0) x = screen_Qwidth - s;
+        if (y < 0) y = screen_Qheight - s;
+        if (x >= screen_Qwidth - s) x = 0;
+        if (y >= screen_Qheight - s) y = 0;
+
+        kwadraty[idx].x = x;
+        kwadraty[idx].y = y;
+    }
+}
+
+void GPIOHandle() {
+    if (time_stamp & 0x200)
+        STR(GPSET1, 1 << (35 - 32));
+    else
+        STR(GPCLR1, 1 << (35 - 32));
+}
+
+// Poprawiona obsługa przycisku na GPIO17 (aktywny niski)
+void CheckButton() {
+    int current_state = !(GPLEV0 & (1 << 17)); // 1 jeśli przycisk wciśnięty (stan niski)
+
+    // Wykrycie zbocza narastającego (puszczenie przycisku): było wciśnięte (1), teraz nie (0)
+    if (!animation_in_progress && last_button_state == 1 && current_state == 0) {
+        animation_in_progress = 1;
+        screen_transition_counter = 0;
+        scroll_direction = -scroll_direction; // zmien kierunek przewijania
+    }
+    last_button_state = current_state;
+}
+
+void handler_irq() {
+    STC1 = STCLO + IntTimerPeriod;
+    STCS = TimerC1FlagResert;
+
+    RGB_LED.R_Timer = (RGB_LED.R_Timer + 1) % RGB_LED.R_Period;
+    RGB_LED.B_Timer = (RGB_LED.B_Timer + 1) % RGB_LED.B_Period;
+
+    if (RGB_LED.R_Timer < RGB_LED.R_Compare)
+        STR(GPSET0, 1 << RED);
+    else
+        STR(GPCLR0, 1 << RED);
+
+    if (RGB_LED.B_Timer < RGB_LED.B_Compare)
+        STR(GPSET0, 1 << BLUE);
+    else
+        STR(GPCLR0, 1 << BLUE);
+
+    if (animation_in_progress) {
+        screen_transition_counter++;
+        if (screen_transition_counter >= IntsPerSecond) {
+            screen_transition_counter = 0;
+            animation_in_progress = 0;
+        }
+
+        RGB_LED.R_Compare = (scroll_direction > 0) ?
+            screen_transition_counter * MaxRGBCompare / IntsPerSecond :
+            MaxRGBCompare - screen_transition_counter * MaxRGBCompare / IntsPerSecond;
+
+        RGB_LED.B_Compare = MaxRGBCompare - RGB_LED.R_Compare;
+    }
+}
+
+void notmain(void) {
+    InitHardware();
+    InitData();
+    irq_enable();
+
+    while (1) {
+        CheckButton();
+        ClearScreen();
+        DrawObjects();
+        UpdateObjects();
+        GPIOHandle();
+        time_stamp++;
+    }
+}
+
+void irq_enable(void) {
+    asm volatile(
+        "mrs r0, cpsr\n\t"
+        "bic r0, r0, #0x80\n\t"
+        "msr cpsr_c, r0\n\t"
+        :::"r0"
+    );
+}
+
+
+#ifndef MAIN_H
+#define MAIN_H
+
+#include <stdlib.h>
+
+#define GPFSEL0     0x3f200000
+#define GPFSEL1     0x3f200004
+#define GPFSEL3     0x3f20000C
+#define GPSET0      0x3f20001C
+#define GPCLR0      0x3f200028
+#define GPSET1      0x3f200020
+#define GPCLR1      0x3f20002C
+#define GPLEV0 (*(volatile unsigned int*)(0x3f200034))
+
+
+
+#define STCLO       (*(volatile unsigned int*)0x3f003004)
+#define STC1        (*(volatile unsigned int*)0x3f003010)
+#define STCS        (*(volatile unsigned int*)0x3f003000)
+#define TimerC1FlagResert 0x2
+#define TimerC1EN   (1 << 1)
+#define IRQPEND1    0x3f00B204
+#define IRQEN1      (*(volatile unsigned int*)0x3f00B210)
+
+#define screen_width        640
+#define screen_height       480
+#define screen_Qwidth       (screen_width << Q_MATH)
+#define screen_Qheight      (screen_height << Q_MATH)
+#define MaxScrollPx         screen_width
+
+#define RED     11
+#define BLUE    10
+#define GREEN   9
+
+#define MaxRGBCompare   100
+#define IntTimerPeriod  100
+#define TimerTicksPerSecond 1000000
+#define IntsPerSecond (TimerTicksPerSecond / IntTimerPeriod)
+
+#define max_obj     16
+#define max_width   640
+#define max_height  480
+#define Q_MATH      8
+
+#define STR(A,V)    (*(volatile unsigned int*)(A) = (V))
+
+typedef struct {
+    int x, y;
+    int dx, dy;
+    int s;
+} square_t;
+
+typedef struct {
+    unsigned int R_Timer, R_Compare, R_Period;
+    unsigned int G_Timer, G_Compare, G_Period;
+    unsigned int B_Timer, B_Compare, B_Period;
+} rgb_pwm_t;
+
+extern unsigned int _fb_addr;
+extern unsigned int _fb_pitch;
+extern unsigned int _mb_msg;
+extern void ExchangeMB(int);
+extern void irq_enable(void);
+
+#endif // MAIN_H
+
+

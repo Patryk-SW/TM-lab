@@ -1,0 +1,312 @@
+#include "main.h"
+
+//Zmienne kontrolujące stan pracy oprogramowania
+int time_stamp, fade_step, fade_start_place;
+
+//Tablica struktur informacji o kwadratach rysowanych na LCD
+square_t kwadraty[max_obj];
+
+unsigned char *fb_addr; 	// Wskaźnik na famebuffer
+unsigned int fb_pitch;		// Szerokośc wiersza framebuffera wyrazona w bajtach
+// Bufory pomocnicze przechowujące obrazy tła
+unsigned long backgroundB[max_height * max_width];
+unsigned long backgroundR[max_height * max_width];
+unsigned int przycisk;
+unsigned long tlo1[max_width * max_height];
+unsigned long tlo2[max_width * max_height];
+
+
+
+//Punkt wejścia do języka C (procedura wywoływnana z asemblera)
+void notmain(void) {
+
+	InitHardware();		// Inicjalizacja sprzętu
+	InitData();			// inicjalizacja danych
+
+    ustaw_tlo1();
+    ustaw_tlo2();
+    while (1) {
+
+        /*if (time_stamp - czas_startowy >= czas_opoznienia) {
+            // Zmiana stanu przycisku po 10 sekundach
+            przycisk = 2;
+        }
+		switch (przycisk){ //zmien case na default
+			case 1:
+				ClearScreen();	// Iteracyjne czyszczenie framebuffer-a
+				DrawObjects();  // Generowanie obiektów graficznych
+				GPIOHandle();	// Obsługa portów I/O
+				time_stamp++;	// Inkrementacja znacznika czasowego
+				break;
+			case 2:
+				CS2();	// Iteracyjne czyszczenie framebuffer-a
+				DO2();  // Generowanie obiektów graficznych
+				GPIOHandle();	// Obsługa portów I/O
+				time_stamp++;	// Inkrementacja znacznika czasowego
+				break;
+		}*/
+
+    	przejscie_miedzy_panelami(fb_addr, tlo1, tlo2, 60, fb_pitch, screen_height);
+    	przejscie_miedzy_panelami(fb_addr, tlo2, tlo1, 60, fb_pitch, screen_height);
+    	//za pomoca steps ustawiamy plynnosc przejscia. W tym steps wynosi 60
+	}
+}
+//zmienia cale tlo na jeden kolor
+void zmien_tlo(unsigned char *FB, unsigned int pitch,unsigned int width, unsigned int height, unsigned int kolor){
+	for(int y=0; y<height;y++){
+		for(int x=0; x<width; x++){ //wypelnia cala linie w danym kolorze i przechodzi do kolejnej linii
+			unsigned int* pixel=(unsigned int*)(FB+x*4+y*pitch); //zmienna wskaźnikowa ktora przechowuje adres pierwszej komorki kazdego pixela
+			*pixel=kolor;
+		}
+	}
+}
+
+//funkcja tworzaca tlo 1, ale nie wyswietlajaca go, taka troche funkcja pomocnicza potrzebna do funkcj ktora bedzie przechodzic miedzy dwoma tłami
+void ustaw_tlo1(void){
+	zmien_tlo(tlo1, fb_pitch, screen_width, screen_height, YELLOW);
+	draw_rect(tlo1, fb_pitch, screen_width/2-40,	100, 80, 30, GREEN);
+	draw_rect(tlo1, fb_pitch, screen_width/2-40,	150, 80, 30, RED);
+	draw_rect(tlo1, fb_pitch, screen_width/2-40,	200, 80, 30, BLUE);
+	draw_rect(tlo1, fb_pitch, screen_width/2-40,	250, 80, 30, 0x0000);
+}
+void ustaw_tlo2(void){
+	zmien_tlo(tlo2, fb_pitch, screen_width, screen_height, GREEN);
+	draw_rect(tlo2, fb_pitch, screen_width/2-40,	100, 80, 30, RED);
+	draw_rect(tlo2, fb_pitch, screen_width/2-40,	150, 80, 30, YELLOW);
+	draw_rect(tlo2, fb_pitch, screen_width/2-40,	200, 80, 30, 0);
+	draw_rect(tlo2, fb_pitch, screen_width/2-40,	250, 80, 30, BLUE);
+}
+//funkcja ktora ma plynnie przechodzic miedzy dwoma tlami
+void przejscie_miedzy_panelami(unsigned char* FB, unsigned long* A, unsigned long* B, int steps, int pitch, int height) {
+	int pixInRow = pitch / 4;
+
+	for (int s = 0; s <= steps; s++) { //steps to calkowita liczba klatek danego przejscia, a s to dana klatka w danej chwili ktora mozemy edytowac
+		for (int i = 0; i < pixInRow * height; i++) { //wewnatrz tej petli modyfikujemy kazda klatke
+			unsigned long kolorA = A[i];
+			unsigned long kolorB = B[i];
+
+			unsigned char rA = (kolorA >> 16) & 0xFF; //taka sztuczka ktora tworzy zmienna ktora przechowuje skladowa czerwoną danego pixela tła A
+			unsigned char gA = (kolorA >> 8) & 0xFF; //analogia tylko dla zielonego
+			unsigned char bA = kolorA & 0xFF; //analogia tylko dla niebieskiego
+			//pierwsze 8 bitow odpowiada za kolor niebieski drugie osiem za zielony i trzecie osiem za czerwony
+			//mam wrazenie ze czat cos pokrecil z tymi kolorami, ale skonczyl mi sie ten darmowy GPT-4o, a wiec nie zdarzylem sie dowiedziec o co chodzi, zalozmy ze tak jak napisalem powyzej jest poprawnie
+			unsigned char rB = (kolorB >> 16) & 0xFF;
+			unsigned char gB = (kolorB >> 8) & 0xFF;
+			unsigned char bB = kolorB & 0xFF;
+
+			unsigned char r = rA + ((rB - rA) * s) / steps; //przechodzimy z tla a do tla b. (rB-rA)*s==> sprawdzamy jaka jest roznica miedzy skladowa jednego i drugiego tla i mnozymy to przez numer aktualej klatki a nastepnie dzielimy przez calkowita ilosc klatek
+			unsigned char g = gA + ((gB - gA) * s) / steps; //w ten sposob czym dalsza klatka tym blizej jestesmy tla B. Na koncu gdy s = steps to mozna sobie podstawic za s/steps=1 i zostaje gA-gA+gB, wiec faktycznie ustawi sie tlo B
+			unsigned char b = bA + ((bB - bA) * s) / steps;
+
+			((unsigned int*)FB)[i] = (r << 16) | (g << 8) | b;
+
+		}
+		for (volatile int d = 0; d < 100000; d++); //pusta petla opozniajaca, nie wiem czemu trzeba dodac volatile zeby dzialo
+		//od tej petli zalezy jak szybkie bedą przejscia miedzy jednym tlem a drugim
+	}
+}
+
+// koniec moich autorskich funkcji. Ponizej jedyna nieautorska ktorą warto ogarnąc bo akurat jej uzywam
+void draw_rect(unsigned char *FB, unsigned int pitch, int x, int y, int width, int height, unsigned int val) {
+
+	for (int yy = 0; yy < height; yy++) {
+		unsigned int *pixel = (unsigned int*) (FB + x * 4 + (y + yy) * pitch);
+		for (int xx = 0; xx < width; xx++) {
+			*pixel++ = val;
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------
+//                                     PROCEDURY
+//--------------------------------------------------------------------------------
+
+//Inicjalizacja danych globalnych
+void InitData() {
+	fade_step = 18, fade_start_place = 0; // Ustaw czyszczenie ekranu na 18 iteracji
+	time_stamp=0;						  // Zerowanie znacznika czasowego
+//Generowanie podkładów graficznych w postaci dwóch gradientów
+	for (unsigned long idx = 0; idx < fb_pitch / 4 * screen_height; idx++) {
+		backgroundB[idx] = 255UL * idx / ((fb_pitch / 4UL) * screen_height);
+		backgroundR[idx] = (255 - 255UL * idx / ((fb_pitch / 4UL) * screen_height)) << 16;
+	}
+//Inicjalizacja struktur danych opisujących ruchome kwadraty w zapisie z przesuniętym przecinkiem o Q_MATH pozycji
+	for (int idx = 0; idx < max_obj; idx++) {
+		int s = kwadraty[idx].s=(rand() & 0x7f) + 5;
+		kwadraty[idx].x = (screen_Qwidth-s)*(rand() & 0x01ff)/0x1ff;
+		kwadraty[idx].y = (screen_Qheight - s)*(rand() & 0x01ff)/0x1ff;
+		kwadraty[idx].dx = ((rand() & 0x1) ? 1 : -1) * ((rand() & 0x7) + 1) ;
+		kwadraty[idx].dy = ((rand() & 0x1) ? 1 : -1) * ((rand() & 0x7) + 1) ;
+	}
+
+}
+
+//Inicjalizacja układów peryferyjnych
+void InitHardware() {
+	STR(GPFSEL3, 1 << 15); // gpio35 ustawiony na wyjście
+	ExchangeMB((int) &_mb_msg | 8); // Wymiana wiadomości na kanale 8 - ustawienie framebuffer-a
+	fb_addr = (unsigned char*) (*(&_fb_addr) & 0x3fffffff); //adres framebuffer-a
+	fb_pitch = (unsigned int) (*(&_fb_pitch)); //skok wiersza framebuffer-a
+}
+
+// Iteracyjne czyszczenie framebuffer-a na podstawie stanu portu GPIO35
+void ClearScreen()
+{
+	fade_screen((unsigned long*) fb_addr, backgroundB, fb_pitch, screen_height); //wygasza iteracyjnie ekran
+}
+
+
+
+void CS2() {
+	fade_screen((unsigned long*) fb_addr, backgroundR, fb_pitch, screen_height); //wygasza iteracyjnie ekran
+}
+
+
+//Wysterowuje porty GPIO35 na podstawie upływu czasu
+void GPIOHandle() {
+	if (time_stamp&0x200)
+		STR(GPSET1, 1 << (35 - 32)); // Ustaw na jedynkę GPIO35
+	else
+		STR(GPCLR1, 1 << (35 - 32)); // Wyzeruj GPIO35
+
+}
+
+// Rysuje sumą logiczną prostokąt o podanych parametrach
+
+
+void fade_screen(unsigned long *FB, unsigned long *back, unsigned int pitch, int height) {
+
+// Wyznaczenie iteracji wygaszania zawartości framebuffer-au
+	fade_start_place++;
+	if (fade_start_place > fade_step) {
+		fade_start_place = 0;
+		fade_step ^= 0x1;
+	}
+	FB = &FB[fade_start_place];
+	back = &back[fade_start_place];
+
+
+//Wygaszanie i nakładanie tła we framebuferze dla wyznaczobej iteracji
+	int pixInRow = pitch / 4;
+	for (unsigned int idx = 0; idx < pixInRow * height; idx += fade_step) {
+		*FB = ((*FB & 0xfe00) >> 1) | *back;
+		FB += fade_step;
+		back += fade_step;
+	}
+
+}
+
+//Rysuje obiekty we framebuferze
+void DrawObjects(){
+
+//Rysuj kwadrat na podstawie stanu GPIO35
+		draw_rect(fb_addr, fb_pitch, screen_width / 2 - 25,
+				screen_height / 2 - 25, 50, 50, 0xff);
+
+
+	for (int idx = 0; idx < max_obj; idx++) {
+
+			int x = kwadraty[idx].x;
+			int y = kwadraty[idx].y;
+			int s = kwadraty[idx].s;
+			int time_offset=time_stamp+127;
+			unsigned char* PTSx=(unsigned char*)&time_stamp;
+			unsigned char* PTSy=(unsigned char*)&time_offset;
+	//Ustaw zmienną offset na podstawie najmłodszych 8 bitów zmiennej time_stamp
+			unsigned char offsetx=*PTSx;
+			unsigned char offsety=*PTSy;
+	//Ustaw zmienną sign na podstawie 8 bitu zmiennej time_stamp
+			int signx=(*(PTSx+1)&1)	  ? -1  : 1;
+			int signy=(*(PTSy+1)&1)	  ? -1  : 1;
+			int saturationx=(signx==-1) ? 255 : 0;
+			int saturationy=(signy==-1) ? 255 : 0;
+	//Ustaw zmienną sign2 na podstawie 9 bitu zmiennej time_stamp
+			int signx2=(*(PTSx+1)&2)	  ? -1  : 1;
+			int signy2=(*(PTSy+1)&2)	  ? -1  : 1;
+
+			x += kwadraty[idx].dx+signx2*((saturationx+signx*offsetx)>>3);
+			y += kwadraty[idx].dy+signy2*((saturationy+signy*offsety)>>3);
+			if (x < 0)
+				x += screen_Qwidth;
+			if (y < 0)
+				y += screen_Qheight;
+			if (x >= screen_Qwidth - s)
+				x -= screen_Qwidth;
+			if (y >= screen_Qheight - s)
+				y -= screen_Qheight;
+			kwadraty[idx].x = x;
+			kwadraty[idx].y = y;
+//Przejscie do systemu opisu całkowitoliczbowego
+			x>>=Q_MATH;
+			y>>=Q_MATH;
+			s>>=Q_MATH;
+			s++;
+
+// Rysowanie kwadratów we framebuferze, tylko dla składowych zielonych pikseli
+		for (int b = y; b < (y + s); b++)
+				for (int a = x; a < (x + s); a++)
+					//  LCD_BUF[a+b*240]=0x7bef;/
+					fb_addr[a * 4 + b * fb_pitch + 1] = 0x1f;
+		}
+
+}
+
+void DO2(){
+
+//Rysuj kwadrat na podstawie stanu GPIO35
+	draw_rect(fb_addr, fb_pitch, screen_width / 2 - 25,
+			screen_height / 2 - 25, 50, 50, 0xff0000);
+
+
+	for (int idx = 0; idx < max_obj; idx++) {
+
+			int x = kwadraty[idx].x;
+			int y = kwadraty[idx].y;
+			int s = kwadraty[idx].s;
+			int time_offset=time_stamp+127;
+			unsigned char* PTSx=(unsigned char*)&time_stamp;
+			unsigned char* PTSy=(unsigned char*)&time_offset;
+	//Ustaw zmienną offset na podstawie najmłodszych 8 bitów zmiennej time_stamp
+			unsigned char offsetx=*PTSx;
+			unsigned char offsety=*PTSy;
+	//Ustaw zmienną sign na podstawie 8 bitu zmiennej time_stamp
+			int signx=(*(PTSx+1)&1)	  ? -1  : 1;
+			int signy=(*(PTSy+1)&1)	  ? -1  : 1;
+			int saturationx=(signx==-1) ? 255 : 0;
+			int saturationy=(signy==-1) ? 255 : 0;
+	//Ustaw zmienną sign2 na podstawie 9 bitu zmiennej time_stamp
+			int signx2=(*(PTSx+1)&2)	  ? -1  : 1;
+			int signy2=(*(PTSy+1)&2)	  ? -1  : 1;
+
+			x += kwadraty[idx].dx+signx2*((saturationx+signx*offsetx)>>3);
+			y += kwadraty[idx].dy+signy2*((saturationy+signy*offsety)>>3);
+			if (x < 0)
+				x += screen_Qwidth;
+			if (y < 0)
+				y += screen_Qheight;
+			if (x >= screen_Qwidth - s)
+				x -= screen_Qwidth;
+			if (y >= screen_Qheight - s)
+				y -= screen_Qheight;
+			kwadraty[idx].x = x;
+			kwadraty[idx].y = y;
+//Przejscie do systemu opisu całkowitoliczbowego
+			x>>=Q_MATH;
+			y>>=Q_MATH;
+			s>>=Q_MATH;
+			s++;
+
+// Rysowanie kwadratów we framebuferze, tylko dla składowych zielonych pikseli
+		for (int b = y; b < (y + s); b++)
+				for (int a = x; a < (x + s); a++)
+					//  LCD_BUF[a+b*240]=0x7bef;/
+					fb_addr[a * 4 + b * fb_pitch + 1] = 0x1f;
+		}
+
+}
+
+//Procedura obsługi przerwania IRQ
+void handler_irq() {
+
+}
+
